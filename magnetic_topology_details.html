@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MAVEN Topology Details</title>
+<!--
+  Secondary details page.
+
+  Purpose:
+  - keep the main viewer compact
+  - still expose run summary and selected-sample metadata
+
+  This page can load from:
+  1. sessionStorage written by the main viewer
+  2. a user-selected topology_summary.json file
+-->
+<style>
+  :root {
+    --bg: #f4efe4;
+    --panel: #fffaf1;
+    --ink: #1f1a17;
+    --muted: #6b625a;
+    --line: #d3c7b8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", Tahoma, sans-serif;
+    color: var(--ink);
+    background: radial-gradient(circle at top left, #fff8ec 0%, #f4efe4 40%, #efe6d7 100%);
+  }
+  .page {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 24px;
+    display: grid;
+    gap: 16px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: 0 10px 28px rgba(50, 36, 20, 0.08);
+    padding: 16px;
+  }
+  h1, h2, p { margin: 0; }
+  h1 { font-size: 24px; margin-bottom: 8px; }
+  h2 { font-size: 17px; margin-bottom: 10px; }
+  .small { font-size: 12px; color: var(--muted); }
+  .toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .toolbar input[type="file"] { max-width: 320px; }
+  button {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: #f7efe5;
+    color: var(--ink);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="card">
+    <h1>MAVEN Topology Details</h1>
+    <p class="small">This page shows the compact metadata moved out of the main viewer.</p>
+  </div>
+  <div class="card">
+    <div class="toolbar">
+      <input id="jsonFile" type="file" accept=".json">
+      <button id="loadButton" type="button">Load From File</button>
+      <button id="reloadCacheButton" type="button">Reload Cached Viewer State</button>
+    </div>
+    <p id="status" class="small" style="margin-top:10px;">Trying cached data from the main viewer.</p>
+  </div>
+  <div class="card">
+    <h2>Run Summary</h2>
+    <pre id="summaryText">No data loaded.</pre>
+  </div>
+  <div class="card">
+    <h2>Selected Sample</h2>
+    <pre id="selectionText">No sample selected.</pre>
+  </div>
+</div>
+<script>
+(() => {
+  // This page is intentionally simple: one small state object and one render
+  // function are enough because there are no graphics, only text summaries.
+  const ui = {
+    file: document.getElementById("jsonFile"),
+    load: document.getElementById("loadButton"),
+    reload: document.getElementById("reloadCacheButton"),
+    status: document.getElementById("status"),
+    summary: document.getElementById("summaryText"),
+    selection: document.getElementById("selectionText"),
+  };
+
+  let state = { data: null, selectedIndex: 0, frame: "ss" };
+
+  function setStatus(text) { ui.status.textContent = text; }
+  function finite(v) { return Number.isFinite(v); }
+  function valueOrDash(v, digits = 3) { return finite(v) ? Number(v).toFixed(digits) : "n/a"; }
+
+  function render() {
+    // Convert the currently loaded JSON into two human-readable blocks:
+    // run summary + current selected sample details.
+    if (!state.data) {
+      ui.summary.textContent = "No data loaded.";
+      ui.selection.textContent = "No sample selected.";
+      return;
+    }
+    const samples = state.data.samples || [];
+    const counts = { closed: 0, open: 0, ambiguous: 0 };
+    samples.forEach((s) => { counts[s.topology] = (counts[s.topology] || 0) + 1; });
+    ui.summary.textContent = [
+      `Start: ${state.data.start_time}`,
+      `End: ${state.data.end_time}`,
+      `Step seconds: ${state.data.step_seconds}`,
+      `Sample count: ${samples.length}`,
+      `Closed: ${counts.closed}`,
+      `Open: ${counts.open}`,
+      `Ambiguous: ${counts.ambiguous}`,
+      `Default frame: ${state.data.default_coordinate_frame || "ss"}`,
+      `Current frame: ${state.frame}`,
+      `Window seconds: ${state.data.context_overview?.window_seconds ?? "n/a"}`,
+    ].join("\n");
+
+    const index = Math.max(0, Math.min(state.selectedIndex, Math.max(0, samples.length - 1)));
+    const sample = samples[index];
+    if (!sample) {
+      ui.selection.textContent = "No sample selected.";
+      return;
+    }
+    const pos = (sample.positions_by_frame_rm?.[state.frame] || sample.position_rm || []).map((v) => valueOrDash(v, 3)).join(", ");
+    const b = (sample.magnetic_field_nT || []).map((v) => valueOrDash(v, 2)).join(", ");
+    ui.selection.textContent = [
+      `Index: ${index}`,
+      `Target time: ${sample.target_time}`,
+      `SWE time: ${sample.swe_time}`,
+      `MAG SS time: ${sample.mag_time_ss}`,
+      `MAG PC time: ${sample.mag_time_pc}`,
+      `Topology: ${sample.topology}`,
+      `Position (${state.frame}, R_M): ${pos}`,
+      `B_MSO [nT]: ${b}`,
+      `Forward score: ${sample.forward_features?.feature_score ?? "n/a"}`,
+      `Backward score: ${sample.backward_features?.feature_score ?? "n/a"}`,
+      `Forward features: knee=${!!sample.forward_features?.knee_present}, auger=${!!sample.forward_features?.auger_present}, dropoff=${!!sample.forward_features?.dropoff_present}`,
+      `Backward features: knee=${!!sample.backward_features?.knee_present}, auger=${!!sample.backward_features?.auger_present}, dropoff=${!!sample.backward_features?.dropoff_present}`,
+    ].join("\n");
+  }
+
+  function loadParsed(parsed) {
+    // Reuse selection/frame information produced by the main viewer so the
+    // details page reflects the same user context.
+    state.data = parsed;
+    state.selectedIndex = Number(sessionStorage.getItem("maven_topology_selected_index") || 0);
+    state.frame = sessionStorage.getItem("maven_topology_frame") || parsed.default_coordinate_frame || "ss";
+    render();
+  }
+
+  function loadFromCache() {
+    const raw = sessionStorage.getItem("maven_topology_json");
+    if (!raw) {
+      setStatus("No cached viewer state was found. Load from the main viewer first or choose a JSON file here.");
+      render();
+      return;
+    }
+    try {
+      loadParsed(JSON.parse(raw));
+      setStatus("Loaded cached state from the main viewer.");
+    } catch (error) {
+      setStatus(`Failed to parse cached viewer state: ${error.message}`);
+    }
+  }
+
+  ui.load.addEventListener("click", async () => {
+    if (!ui.file.files.length) {
+      setStatus("Choose a topology_summary.json file first.");
+      return;
+    }
+    try {
+      const text = await ui.file.files[0].text();
+      const parsed = JSON.parse(text);
+      sessionStorage.setItem("maven_topology_json", text);
+      loadParsed(parsed);
+      setStatus("Loaded details from file.");
+    } catch (error) {
+      setStatus(`Load failed: ${error.message}`);
+    }
+  });
+
+  ui.reload.addEventListener("click", loadFromCache);
+  loadFromCache();
+})();
+</script>
+</body>
+</html>

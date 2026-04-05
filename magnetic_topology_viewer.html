@@ -1,0 +1,1594 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MAVEN Magnetic Topology Viewer</title>
+<!--
+  Main offline viewer.
+
+  Page layout:
+  - left: controls + time navigation
+  - center: main stage (orbit view or focused plot view)
+  - right: small context plots
+
+  The JavaScript below is intentionally self-contained so the page can be
+  opened directly from disk without a server.
+-->
+<style>
+  /* Visual variables are centralized here so the whole page theme can be
+     adjusted without searching through many selectors. */
+  :root {
+    --bg: #f4efe4;
+    --panel: #fffaf1;
+    --ink: #1f1a17;
+    --muted: #6b625a;
+    --line: #d3c7b8;
+    --accent: #b4572f;
+    --open: #2674c8;
+    --closed: #cc4338;
+    --ambiguous: #8a847d;
+    --left-width: clamp(240px, 22vw, 360px);
+    --right-width: clamp(260px, 26vw, 420px);
+    --splitter-width: 8px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    height: 100vh;
+    overflow: hidden;
+    font-family: "Segoe UI", Tahoma, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(circle at top left, #fff8ec 0%, #f4efe4 40%, #efe6d7 100%);
+  }
+  .app {
+    display: grid;
+    grid-template-columns:
+      minmax(240px, var(--left-width))
+      var(--splitter-width)
+      minmax(420px, 1fr)
+      var(--splitter-width)
+      minmax(260px, var(--right-width));
+    height: 100vh;
+  }
+  .sidebar {
+    padding: 12px;
+    background: rgba(255, 250, 241, 0.9);
+    border-right: 1px solid var(--line);
+    display: grid;
+    gap: 8px;
+    align-content: start;
+    height: 100vh;
+    overflow: hidden;
+    min-width: 0;
+  }
+  .viewer-column {
+    padding: 8px;
+    background: rgba(255, 250, 241, 0.35);
+    min-width: 0;
+  }
+  .data-column {
+    padding: 8px;
+    height: 100vh;
+    overflow: hidden;
+    min-width: 0;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: 0 10px 28px rgba(50, 36, 20, 0.08);
+  }
+  h1, h2, h3, p { margin: 0; }
+  h1 { font-size: 20px; margin-bottom: 8px; }
+  h2 { font-size: 15px; margin-bottom: 6px; }
+  .stack { display: grid; gap: 8px; }
+  .controls, .selection, .legend-box { padding: 10px; }
+  .field { display: grid; gap: 4px; }
+  .field label { font-size: 12px; color: var(--muted); }
+  input[type="file"], input[type="text"], select, button, input[type="range"] {
+    width: 100%;
+  }
+  input[type="text"], select, button {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 8px 10px;
+    background: white;
+    color: var(--ink);
+  }
+  button {
+    cursor: pointer;
+    background: #f3e1cf;
+    border-color: #d4bfa9;
+    font-weight: 600;
+  }
+  button:hover { background: #ecd5bf; }
+  .viewer-wrap {
+    position: relative;
+    overflow: hidden;
+  }
+  .viewer-stage {
+    position: relative;
+    height: calc(100vh - 16px);
+    min-height: 640px;
+  }
+  .viewer-stage.hidden {
+    display: none;
+  }
+  #viewerCanvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .overlay {
+    position: absolute;
+    left: 14px;
+    top: 14px;
+    background: rgba(255, 250, 241, 0.9);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px 12px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .status {
+    font-size: 12px;
+    color: var(--muted);
+    min-height: 18px;
+  }
+  .details-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 8px 10px;
+    background: #f7efe5;
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .details-link[aria-disabled="true"] {
+    pointer-events: none;
+    opacity: 0.5;
+  }
+  .pill-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 9px;
+    border-radius: 999px;
+    background: #f8efe3;
+    font-size: 12px;
+  }
+  .swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+  }
+  .grid-panels {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .panel {
+    padding: 0;
+    display: grid;
+    grid-template-columns: 68px 1fr;
+    gap: 0;
+    cursor: zoom-in;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: none;
+  }
+  .panel-head {
+    grid-column: 1;
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    padding: 6px 6px 6px 8px;
+    border-right: 1px solid #e3d9cb;
+    background: #f8f1e8;
+  }
+  .panel-head h3 {
+    font-size: 11px;
+    line-height: 1.05;
+    font-weight: 700;
+  }
+  .panel-head span {
+    font-size: 9px;
+    color: var(--muted);
+    line-height: 1.05;
+  }
+  .plot-row {
+    grid-column: 2;
+    grid-row: 1;
+    display: grid;
+    grid-template-columns: 1fr 28px;
+    gap: 4px;
+    align-items: stretch;
+    padding: 2px 2px 2px 4px;
+    background: #fff;
+  }
+  canvas.plot {
+    width: 100%;
+    height: 84px;
+    border-radius: 4px;
+    background: #fff;
+    border: 1px solid #ddd0c0;
+  }
+  canvas.legend {
+    width: 28px;
+    height: 84px;
+    border-radius: 4px;
+    background: #fff;
+    border: 1px solid #ddd0c0;
+  }
+  .panel > canvas.plot {
+    grid-column: 2;
+    grid-row: 1;
+    margin: 2px 2px 2px 4px;
+  }
+  [data-panel-key="bmag"] canvas.plot,
+  [data-panel-key="bvec"] canvas.plot,
+  [data-panel-key="model"] canvas.plot {
+    height: 62px;
+  }
+  [data-panel-key="staticEnergy"] canvas.plot,
+  [data-panel-key="staticMass"] canvas.plot,
+  [data-panel-key="swePad"] canvas.plot,
+  [data-panel-key="sweEnergy"] canvas.plot {
+    height: 76px;
+  }
+  [data-panel-key="staticEnergy"] canvas.legend,
+  [data-panel-key="staticMass"] canvas.legend,
+  [data-panel-key="swePad"] canvas.legend,
+  [data-panel-key="sweEnergy"] canvas.legend {
+    height: 76px;
+  }
+  [data-panel-key="spectrum"] canvas.plot {
+    height: 90px;
+  }
+  .timeline {
+    padding: 10px;
+    display: grid;
+    gap: 6px;
+  }
+  .time-row {
+    display: grid;
+    grid-template-columns: 1fr 150px 92px;
+    gap: 6px;
+    align-items: end;
+  }
+  .small { font-size: 12px; color: var(--muted); }
+  .splitter {
+    position: relative;
+    background: linear-gradient(180deg, rgba(211, 199, 184, 0.2), rgba(211, 199, 184, 0.7), rgba(211, 199, 184, 0.2));
+    cursor: col-resize;
+    user-select: none;
+    touch-action: none;
+  }
+  .splitter::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 2px;
+    height: 64px;
+    border-radius: 999px;
+    background: rgba(107, 98, 90, 0.55);
+  }
+  .splitter.active {
+    background: linear-gradient(180deg, rgba(180, 87, 47, 0.2), rgba(180, 87, 47, 0.6), rgba(180, 87, 47, 0.2));
+  }
+  pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .focus-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(255, 250, 241, 0.92);
+  }
+  .focus-head h2 {
+    margin: 0;
+    font-size: 16px;
+  }
+  .focus-back {
+    width: auto;
+    min-width: 120px;
+  }
+  .focus-body {
+    padding: 14px;
+    display: grid;
+    grid-template-columns: 1fr 68px;
+    gap: 12px;
+    min-height: 0;
+    height: calc(100% - 56px);
+  }
+  .focus-body.single {
+    grid-template-columns: 1fr;
+  }
+  #focusPlotCanvas,
+  #focusLegendCanvas {
+    width: 100%;
+    height: 100%;
+    border-radius: 12px;
+    background: #fff;
+    border: 1px solid #e3d9cb;
+  }
+  @media (max-width: 1300px) {
+    .app {
+      grid-template-columns:
+        minmax(220px, var(--left-width))
+        var(--splitter-width)
+        minmax(360px, 1fr)
+        var(--splitter-width)
+        minmax(220px, var(--right-width));
+    }
+    .time-row { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 1100px) {
+    .app { grid-template-columns: 1fr; }
+    .splitter { display: none; }
+    .time-row { grid-template-columns: 1fr; }
+    body { overflow: auto; height: auto; }
+    .app, .sidebar, .data-column { height: auto; overflow: visible; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Left column: load data, switch frame, and choose the current time. -->
+  <aside class="sidebar">
+    <div class="card controls stack">
+      <div>
+        <h1>MAVEN Topology Viewer</h1>
+        <p class="small">Offline 3D trajectory viewer for topology and context panels.</p>
+      </div>
+      <div class="field">
+        <label for="jsonFile">Topology JSON</label>
+        <input id="jsonFile" type="file" accept=".json">
+      </div>
+      <div class="field">
+        <label for="frameSelect">Coordinate frame</label>
+        <select id="frameSelect">
+          <option value="ss">SS / MSO</option>
+          <option value="pc">PC / Mars body-fixed</option>
+        </select>
+      </div>
+      <button id="loadButton" type="button">Load</button>
+      <button id="resetViewButton" type="button">Reset View</button>
+      <div id="status" class="status">Choose a topology_summary.json file, then click Load.</div>
+    </div>
+    <div class="card legend-box stack">
+      <h2>Topology Colors</h2>
+      <div class="pill-row">
+        <span class="pill"><span class="swatch" style="background:var(--closed)"></span>closed</span>
+        <span class="pill"><span class="swatch" style="background:var(--open)"></span>open</span>
+        <span class="pill"><span class="swatch" style="background:var(--ambiguous)"></span>ambiguous</span>
+      </div>
+      <p class="small">Drag to rotate, mouse wheel to zoom, click the orbit or use the time controls below.</p>
+    </div>
+    <a id="detailsLink" class="details-link" href="magnetic_topology_details.html" target="_blank" rel="noopener" aria-disabled="true">Open Details Page</a>
+    <div class="card timeline">
+      <div>
+        <h2>Time Navigation</h2>
+        <p class="small">The slider follows the selected orbit point. You can drag it, click on it, or type a time directly.</p>
+      </div>
+      <input id="timeSlider" type="range" min="0" max="0" step="1" value="0">
+      <div class="time-row">
+        <div class="field">
+          <label for="timeInput">Time (ISO, for example 2015-01-05T07:45:00+00:00)</label>
+          <input id="timeInput" type="text" placeholder="2015-01-05T07:45:00+00:00">
+        </div>
+        <div class="field">
+          <label>Selected time</label>
+          <div id="selectedTimeLabel" class="small">No sample selected.</div>
+        </div>
+        <button id="jumpTimeButton" type="button">Jump To Time</button>
+      </div>
+    </div>
+  </aside>
+  <div id="leftSplitter" class="splitter" aria-hidden="true" title="Drag to resize panels"></div>
+  <!-- Center column: the main "hero" area.
+       It either shows the 3D orbit or, after a click, a focused data plot. -->
+  <section class="viewer-column">
+    <section id="orbitStage" class="card viewer-wrap viewer-stage">
+      <canvas id="viewerCanvas"></canvas>
+      <div class="overlay" id="viewerMeta">Frame: SS / MSO</div>
+    </section>
+    <section id="focusStage" class="card viewer-wrap viewer-stage hidden">
+      <div class="focus-head">
+        <h2 id="focusTitle">Focused Plot</h2>
+        <button id="focusBackButton" class="focus-back" type="button">Back To Orbit</button>
+      </div>
+      <div id="focusBody" class="focus-body">
+        <canvas id="focusPlotCanvas"></canvas>
+        <canvas id="focusLegendCanvas"></canvas>
+      </div>
+    </section>
+  </section>
+  <div id="rightSplitter" class="splitter" aria-hidden="true" title="Drag to resize panels"></div>
+  <!-- Right column: compact overview plots.
+       Clicking any one of them promotes it into the center stage. -->
+  <section class="data-column">
+    <div class="stack">
+      <div class="grid-panels">
+        <section class="card panel" data-panel-key="staticEnergy" data-panel-title="STATIC Energy" data-source-canvas="staticEnergyCanvas" data-source-legend="staticEnergyLegend">
+          <div class="panel-head"><h3>STATIC<br>Energy</h3><span>eflux</span></div>
+          <div class="plot-row"><canvas class="plot" id="staticEnergyCanvas"></canvas><canvas class="legend" id="staticEnergyLegend"></canvas></div>
+        </section>
+        <section class="card panel" data-panel-key="staticMass" data-panel-title="STATIC Mass" data-source-canvas="staticMassCanvas" data-source-legend="staticMassLegend">
+          <div class="panel-head"><h3>STATIC<br>Mass</h3><span>eflux</span></div>
+          <div class="plot-row"><canvas class="plot" id="staticMassCanvas"></canvas><canvas class="legend" id="staticMassLegend"></canvas></div>
+        </section>
+        <section class="card panel" data-panel-key="bmag" data-panel-title="|B|" data-source-canvas="magTotalCanvas">
+          <div class="panel-head"><h3>|B|</h3><span>MAG</span></div>
+          <canvas class="plot" id="magTotalCanvas"></canvas>
+        </section>
+        <section class="card panel" data-panel-key="bvec" data-panel-title="B_MSO" data-source-canvas="magVectorCanvas">
+          <div class="panel-head"><h3>B_MSO</h3><span>Bx By Bz</span></div>
+          <canvas class="plot" id="magVectorCanvas"></canvas>
+        </section>
+        <section class="card panel" data-panel-key="model" data-panel-title="Model B_MSO" data-source-canvas="modelCanvas">
+          <div class="panel-head"><h3>Model<br>B_MSO</h3><span>Bx By Bz</span></div>
+          <canvas class="plot" id="modelCanvas"></canvas>
+        </section>
+        <section class="card panel" data-panel-key="swePad" data-panel-title="SWE PAD (111-140 eV)" data-source-canvas="swePadCanvas" data-source-legend="swePadLegend">
+          <div class="panel-head"><h3>SWE PAD</h3><span>111-140 eV</span></div>
+          <div class="plot-row"><canvas class="plot" id="swePadCanvas"></canvas><canvas class="legend" id="swePadLegend"></canvas></div>
+        </section>
+        <section class="card panel" data-panel-key="sweEnergy" data-panel-title="SWE Energy" data-source-canvas="sweEnergyCanvas" data-source-legend="sweEnergyLegend">
+          <div class="panel-head"><h3>SWE<br>Energy</h3><span>eflux</span></div>
+          <div class="plot-row"><canvas class="plot" id="sweEnergyCanvas"></canvas><canvas class="legend" id="sweEnergyLegend"></canvas></div>
+        </section>
+        <section class="card panel" data-panel-key="spectrum" data-panel-title="Directional Electron Spectra" data-source-canvas="directionalSpectrumCanvas">
+          <div class="panel-head"><h3>Electron<br>Spectra</h3><span>F / B</span></div>
+          <canvas class="plot" id="directionalSpectrumCanvas"></canvas>
+        </section>
+      </div>
+    </div>
+  </section>
+</div>
+<script>
+(() => {
+  // `state` is the single source of truth for the interactive page.
+  // Most redraws only depend on these fields.
+  const state = {
+    data: null,
+    samples: [],
+    frame: "ss",
+    selectedIndex: 0,
+    rotationX: 0.55,
+    rotationY: -0.9,
+    zoom: 2.6,
+    drag: null,
+    pickPoints: [],
+    focusedPanel: null,
+  };
+
+  const ui = {
+    app: document.querySelector(".app"),
+    sidebar: document.querySelector(".sidebar"),
+    viewerColumn: document.querySelector(".viewer-column"),
+    dataColumn: document.querySelector(".data-column"),
+    file: document.getElementById("jsonFile"),
+    load: document.getElementById("loadButton"),
+    frame: document.getElementById("frameSelect"),
+    reset: document.getElementById("resetViewButton"),
+    details: document.getElementById("detailsLink"),
+    status: document.getElementById("status"),
+    viewerMeta: document.getElementById("viewerMeta"),
+    viewer: document.getElementById("viewerCanvas"),
+    orbitStage: document.getElementById("orbitStage"),
+    focusStage: document.getElementById("focusStage"),
+    focusBody: document.getElementById("focusBody"),
+    focusTitle: document.getElementById("focusTitle"),
+    focusPlot: document.getElementById("focusPlotCanvas"),
+    focusLegend: document.getElementById("focusLegendCanvas"),
+    focusBack: document.getElementById("focusBackButton"),
+    slider: document.getElementById("timeSlider"),
+    timeInput: document.getElementById("timeInput"),
+    timeLabel: document.getElementById("selectedTimeLabel"),
+    jumpTime: document.getElementById("jumpTimeButton"),
+    leftSplitter: document.getElementById("leftSplitter"),
+    rightSplitter: document.getElementById("rightSplitter"),
+  };
+
+  const topologyColor = { closed: "#cc4338", open: "#2674c8", ambiguous: "#8a847d" };
+  const lineColors = { bx: "#cc4338", by: "#2674c8", bz: "#3a8a53", bmag: "#6e5b4f" };
+  const DEFAULT_PANE_WIDTHS = {
+    left: "clamp(240px, 22vw, 360px)",
+    right: "clamp(260px, 26vw, 420px)",
+  };
+  // Fixed plotting ranges make different times easier to compare visually.
+  const FIXED_RANGES = {
+    staticEnergy: { yMode: "log", yRange: [0.1, 10000.0], colorLogRange: [3.0, 9.0] },
+    staticMass: { yMode: "linear", yRange: null, colorLogRange: [3.0, 9.0] },
+    swePad: { yMode: "linear", yRange: [0.0, 180.0], colorLogRange: [3.0, 9.0] },
+    sweEnergy: { yMode: "log", yRange: [0.1, 10000.0], colorLogRange: [3.0, 9.0] },
+    spectrum: {
+      xRange: [0.1, 10000.0],
+      yRange: [1e3, 1e9],
+      bands: [
+        { label: "knee", range: [50.0, 70.0], color: "rgba(204, 67, 56, 0.14)" },
+        { label: "auger", range: [180.0, 320.0], color: "rgba(38, 116, 200, 0.12)" },
+        { label: "dropoff", range: [550.0, 900.0], color: "rgba(58, 138, 83, 0.12)" },
+      ],
+    },
+    bmag: { yRange: [0.0, 50.0] },
+    bvec: { yRange: [-50.0, 50.0] },
+    model: { yRange: [-30.0, 30.0] },
+  };
+
+  function setStatus(text) { ui.status.textContent = text; }
+  function rootStyle() { return document.documentElement.style; }
+  function paneLayoutLimits() {
+    const appWidth = Math.max(ui.app.getBoundingClientRect().width, window.innerWidth || 0);
+    const splitterWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--splitter-width")) || 8;
+    const minLeft = 220;
+    const minRight = 220;
+    const minCenter = window.innerWidth <= 1300 ? 360 : 420;
+    return {
+      appWidth,
+      minLeft,
+      minRight,
+      minCenter,
+      splitterTotal: splitterWidth * 2,
+    };
+  }
+  function clearPersistedPaneWidths() {
+    try {
+      localStorage.removeItem("maven_viewer_left_width");
+      localStorage.removeItem("maven_viewer_right_width");
+    } catch (error) {
+      // Ignore storage failures.
+    }
+  }
+  function resetPaneWidths(persist = false) {
+    rootStyle().setProperty("--left-width", DEFAULT_PANE_WIDTHS.left);
+    rootStyle().setProperty("--right-width", DEFAULT_PANE_WIDTHS.right);
+    if (persist) clearPersistedPaneWidths();
+  }
+  function parseStoredPaneWidth(rawValue, minWidth, maxWidth) {
+    if (!rawValue) return null;
+    const match = String(rawValue).trim().match(/^(-?\d+(?:\.\d+)?)px$/i);
+    if (!match) return null;
+    const numeric = Number(match[1]);
+    if (!Number.isFinite(numeric)) return null;
+    return clamp(Math.round(numeric), minWidth, maxWidth);
+  }
+  function enforcePaneWidthBounds() {
+    if (window.innerWidth <= 1100) {
+      resetPaneWidths(false);
+      return;
+    }
+    const { minLeft, minRight, minCenter, splitterTotal } = paneLayoutLimits();
+    const maxLeft = Math.max(minLeft, window.innerWidth - minRight - minCenter - splitterTotal);
+    const maxRight = Math.max(minRight, window.innerWidth - minLeft - minCenter - splitterTotal);
+    let left = clamp(Math.round(ui.sidebar.getBoundingClientRect().width), minLeft, maxLeft);
+    let right = clamp(Math.round(ui.dataColumn.getBoundingClientRect().width), minRight, maxRight);
+    const maxCombined = Math.max(minLeft + minRight, window.innerWidth - minCenter - splitterTotal);
+    if (left + right > maxCombined) {
+      const overflow = left + right - maxCombined;
+      if (left >= right) left = Math.max(minLeft, left - overflow);
+      else right = Math.max(minRight, right - overflow);
+    }
+    rootStyle().setProperty("--left-width", `${left}px`);
+    rootStyle().setProperty("--right-width", `${right}px`);
+  }
+  function persistPaneWidths() {
+    try {
+      if (window.innerWidth <= 1100) {
+        clearPersistedPaneWidths();
+        return;
+      }
+      localStorage.setItem("maven_viewer_left_width", `${Math.round(ui.sidebar.getBoundingClientRect().width)}px`);
+      localStorage.setItem("maven_viewer_right_width", `${Math.round(ui.dataColumn.getBoundingClientRect().width)}px`);
+    } catch (error) {
+      // Pane persistence is optional; ignore storage failures.
+    }
+  }
+  function restorePaneWidths() {
+    try {
+      if (window.innerWidth <= 1100) {
+        resetPaneWidths(false);
+        return;
+      }
+      const { minLeft, minRight, minCenter, splitterTotal } = paneLayoutLimits();
+      const maxLeft = Math.max(minLeft, window.innerWidth - minRight - minCenter - splitterTotal);
+      const maxRight = Math.max(minRight, window.innerWidth - minLeft - minCenter - splitterTotal);
+      const left = localStorage.getItem("maven_viewer_left_width");
+      const right = localStorage.getItem("maven_viewer_right_width");
+      const parsedLeft = parseStoredPaneWidth(left, minLeft, maxLeft);
+      const parsedRight = parseStoredPaneWidth(right, minRight, maxRight);
+      const maxCombined = Math.max(minLeft + minRight, window.innerWidth - minCenter - splitterTotal);
+
+      if (
+        (left && parsedLeft === null) ||
+        (right && parsedRight === null) ||
+        (parsedLeft !== null && parsedRight !== null && parsedLeft + parsedRight > maxCombined)
+      ) {
+        clearPersistedPaneWidths();
+        resetPaneWidths(false);
+        return;
+      }
+      resetPaneWidths(false);
+      if (parsedLeft !== null) rootStyle().setProperty("--left-width", `${parsedLeft}px`);
+      if (parsedRight !== null) rootStyle().setProperty("--right-width", `${parsedRight}px`);
+    } catch (error) {
+      resetPaneWidths(false);
+    }
+  }
+  function setupPaneResizer(splitter, side) {
+    splitter.addEventListener("pointerdown", (event) => {
+      if (window.innerWidth <= 1100) return;
+      event.preventDefault();
+      splitter.setPointerCapture(event.pointerId);
+      splitter.classList.add("active");
+      const appRect = ui.app.getBoundingClientRect();
+      const startX = event.clientX;
+      const startLeft = ui.sidebar.getBoundingClientRect().width;
+      const startRight = ui.dataColumn.getBoundingClientRect().width;
+      const minLeft = 220;
+      const minRight = 220;
+      const minCenter = 360;
+
+      const onMove = (moveEvent) => {
+        const delta = moveEvent.clientX - startX;
+        if (side === "left") {
+          const maxLeft = Math.max(minLeft, appRect.width - startRight - minCenter - 2 * 8);
+          const next = Math.min(Math.max(startLeft + delta, minLeft), maxLeft);
+          rootStyle().setProperty("--left-width", `${next}px`);
+        } else {
+          const maxRight = Math.max(minRight, appRect.width - startLeft - minCenter - 2 * 8);
+          const next = Math.min(Math.max(startRight - delta, minRight), maxRight);
+          rootStyle().setProperty("--right-width", `${next}px`);
+        }
+      };
+
+      const onUp = () => {
+        splitter.classList.remove("active");
+        persistPaneWidths();
+        splitter.removeEventListener("pointermove", onMove);
+        splitter.removeEventListener("pointerup", onUp);
+        splitter.removeEventListener("pointercancel", onUp);
+        drawViewer();
+        renderPanels();
+        syncFocusedPanel();
+      };
+
+      splitter.addEventListener("pointermove", onMove);
+      splitter.addEventListener("pointerup", onUp);
+      splitter.addEventListener("pointercancel", onUp);
+    });
+  }
+  function resolveCanvas(target) {
+    return typeof target === "string" ? document.getElementById(target) : target;
+  }
+  function persistViewerState(rawText = null) {
+    try {
+      if (rawText !== null) sessionStorage.setItem("maven_topology_json", rawText);
+      sessionStorage.setItem("maven_topology_frame", state.frame);
+      sessionStorage.setItem("maven_topology_selected_index", String(state.selectedIndex));
+      ui.details.setAttribute("aria-disabled", "false");
+    } catch (error) {
+      setStatus(`Loaded, but failed to cache state for details page: ${error.message}`);
+    }
+  }
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function finite(v) { return Number.isFinite(v); }
+  function isoToUnix(text) { const t = Date.parse(text); return Number.isFinite(t) ? t / 1000 : NaN; }
+  function unixToIso(sec) { return new Date(sec * 1000).toISOString(); }
+  function valueOrDash(v, digits = 3) { return finite(v) ? Number(v).toFixed(digits) : "n/a"; }
+  function ctx(id) { return document.getElementById(id).getContext("2d"); }
+
+  function resizeCanvas(canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    const width = Math.max(1, Math.round(rect.width * ratio));
+    const height = Math.max(1, Math.round(rect.height * ratio));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+  }
+
+  function palette(t) {
+    const c = clamp(t, 0, 1);
+    const stops = [
+      [10, 26, 68],
+      [31, 92, 143],
+      [54, 144, 192],
+      [120, 179, 131],
+      [232, 191, 92],
+      [202, 96, 62],
+      [120, 22, 31],
+    ];
+    const p = c * (stops.length - 1);
+    const i = Math.floor(p);
+    const f = p - i;
+    const a = stops[i];
+    const b = stops[Math.min(i + 1, stops.length - 1)];
+    const rgb = a.map((v, idx) => Math.round(v + (b[idx] - v) * f));
+    return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+  }
+
+  function withWindow(times, centerUnix, seconds) {
+    const start = centerUnix - seconds;
+    const end = centerUnix + seconds;
+    const indices = [];
+    for (let i = 0; i < times.length; i += 1) {
+      if (times[i] >= start && times[i] <= end) indices.push(i);
+    }
+    return { start, end, indices };
+  }
+
+  function nearestIndex(times, targetUnix) {
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < times.length; i += 1) {
+      const dist = Math.abs(times[i] - targetUnix);
+      if (dist < bestDist) { best = i; bestDist = dist; }
+    }
+    return best;
+  }
+
+  function project(point, width, height) {
+    const [x0, y0, z0] = point;
+    const cy = Math.cos(state.rotationY), sy = Math.sin(state.rotationY);
+    const cx = Math.cos(state.rotationX), sx = Math.sin(state.rotationX);
+    const x1 = x0 * cy + z0 * sy;
+    const z1 = -x0 * sy + z0 * cy;
+    const y2 = y0 * cx - z1 * sx;
+    const z2 = y0 * sx + z1 * cx;
+    const camZ = state.zoom + 4.0;
+    const scale = Math.min(width, height) * 0.31 / Math.max(0.8, camZ - z2);
+    return { x: width / 2 + x1 * scale, y: height / 2 - y2 * scale, depth: z2, scale };
+  }
+
+  function currentPoints() {
+    return state.samples.map((sample) => {
+      const frames = sample.positions_by_frame_rm || {};
+      return frames[state.frame] || sample.position_rm || [0, 0, 0];
+    });
+  }
+
+  function projectedMarsRadius(width, height) {
+    const center = project([0, 0, 0], width, height);
+    const surfacePoints = [
+      project([1, 0, 0], width, height),
+      project([-1, 0, 0], width, height),
+      project([0, 1, 0], width, height),
+      project([0, -1, 0], width, height),
+      project([0, 0, 1], width, height),
+      project([0, 0, -1], width, height),
+    ];
+    const radii = surfacePoints
+      .map((p) => Math.hypot(p.x - center.x, p.y - center.y))
+      .filter((v) => Number.isFinite(v) && v > 0);
+    return radii.length ? radii.reduce((a, b) => a + b, 0) / radii.length : Math.min(width, height) * 0.18;
+  }
+
+  function drawViewer() {
+    // This is the 3D orbit renderer.
+    // It uses a simple custom projection instead of a 3D library so the page
+    // stays portable and works as a single local HTML file.
+    const canvas = ui.viewer;
+    resizeCanvas(canvas);
+    const c = canvas.getContext("2d");
+    const w = canvas.width, h = canvas.height;
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = "#fffdf8";
+    c.fillRect(0, 0, w, h);
+
+    const center = project([0, 0, 0], w, h);
+    const radius = projectedMarsRadius(w, h);
+    const rg = c.createRadialGradient(center.x - radius * 0.3, center.y - radius * 0.35, radius * 0.18, center.x, center.y, radius * 1.1);
+    rg.addColorStop(0, "#d88d5e");
+    rg.addColorStop(0.6, "#b8623f");
+    rg.addColorStop(1, "#8f402c");
+    c.fillStyle = rg;
+    c.beginPath();
+    c.arc(center.x, center.y, radius, 0, Math.PI * 2);
+    c.fill();
+    c.strokeStyle = "rgba(255,255,255,0.25)";
+    c.lineWidth = 1;
+    for (let i = -60; i <= 60; i += 30) {
+      const ry = Math.cos(i * Math.PI / 180) * radius;
+      c.beginPath();
+      c.ellipse(center.x, center.y, radius, Math.abs(ry), 0, 0, Math.PI * 2);
+      c.stroke();
+    }
+
+    const points = currentPoints();
+    const projected = points.map((p, i) => ({ i, p: project(p, w, h), topo: state.samples[i].topology }));
+    state.pickPoints = projected;
+
+    c.lineWidth = 2.2;
+    for (let i = 1; i < projected.length; i += 1) {
+      c.beginPath();
+      c.strokeStyle = topologyColor[state.samples[i - 1].topology] || "#777";
+      c.moveTo(projected[i - 1].p.x, projected[i - 1].p.y);
+      c.lineTo(projected[i].p.x, projected[i].p.y);
+      c.stroke();
+    }
+
+    projected.slice().sort((a, b) => a.p.depth - b.p.depth).forEach((item) => {
+      c.fillStyle = topologyColor[item.topo] || "#777";
+      c.beginPath();
+      c.arc(item.p.x, item.p.y, item.i === state.selectedIndex ? 7 : 4.2, 0, Math.PI * 2);
+      c.fill();
+      if (item.i === state.selectedIndex) {
+        c.strokeStyle = "#111";
+        c.lineWidth = 2;
+        c.stroke();
+      }
+    });
+  }
+
+  function plotLayout(width, height, expanded = false) {
+    // The focused center plot gets larger margins/fonts than the small side
+    // panels. That keeps axes readable after window swapping.
+    if (expanded) {
+      return {
+        pad: { l: 84, r: 24, t: 24, b: 42 },
+        font: "15px Segoe UI",
+        smallFont: "13px Segoe UI",
+        legendFont: "13px Segoe UI",
+      };
+    }
+    return {
+      pad: { l: 58, r: 18, t: 16, b: 28 },
+      font: "12px Segoe UI",
+      smallFont: "11px Segoe UI",
+      legendFont: "12px Segoe UI",
+    };
+  }
+
+  function drawLinePlot(canvasTarget, traces, yLabel, options = {}) {
+    // Generic line-plot renderer shared by:
+    // - |B|
+    // - B_MSO
+    // - Model B_MSO
+    const canvas = resolveCanvas(canvasTarget);
+    resizeCanvas(canvas);
+    const c = canvas.getContext("2d");
+    const w = canvas.width, h = canvas.height;
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = "#fff";
+    c.fillRect(0, 0, w, h);
+    const layout = plotLayout(w, h, canvas === ui.focusPlot);
+    const pad = layout.pad;
+    const centerUnix = isoToUnix(state.samples[state.selectedIndex].target_time);
+    const halfWindow = state.data.context_overview?.window_seconds || 600;
+    const x0 = centerUnix - halfWindow, x1 = centerUnix + halfWindow;
+    const arrays = traces.flatMap((t) => t.values.filter(finite));
+    if (!arrays.length) { drawNoData(c, w, h, "No data in window"); return; }
+    const ymin = Math.min(...arrays), ymax = Math.max(...arrays);
+    const yLow = options.yRange ? options.yRange[0] : (ymin === ymax ? ymin - 1 : ymin);
+    const yHigh = options.yRange ? options.yRange[1] : (ymin === ymax ? ymax + 1 : ymax);
+    drawAxes(c, w, h, pad, x0, x1, yLow, yHigh, "Time", yLabel, layout);
+    const xMap = (v) => pad.l + (v - x0) / (x1 - x0) * (w - pad.l - pad.r);
+    const yMap = (v) => h - pad.b - (v - yLow) / (yHigh - yLow) * (h - pad.t - pad.b);
+    traces.forEach((trace) => {
+      c.strokeStyle = trace.color;
+      c.lineWidth = 1.6;
+      c.beginPath();
+      let started = false;
+      for (let i = 0; i < trace.times.length; i += 1) {
+        const yv = trace.values[i];
+        if (!finite(yv)) continue;
+        const px = xMap(trace.times[i]), py = yMap(yv);
+        if (!started) { c.moveTo(px, py); started = true; } else { c.lineTo(px, py); }
+      }
+      c.stroke();
+    });
+    drawTimeMarker(c, w, h, pad, centerUnix, x0, x1);
+    drawTraceLegend(c, w, traces, layout);
+  }
+
+  function drawTraceLegend(c, w, traces, layout) {
+    c.font = layout.smallFont;
+    let x = w - 10;
+    traces.slice().reverse().forEach((trace) => {
+      const labelW = c.measureText(trace.label).width + 28;
+      x -= labelW;
+      c.fillStyle = "rgba(255,250,241,0.9)";
+      c.fillRect(x, 8, labelW, 18);
+      c.fillStyle = trace.color;
+      c.fillRect(x + 6, 13, 12, 3);
+      c.fillStyle = "#333";
+      c.font = layout.smallFont;
+      c.fillText(trace.label, x + 22, 21);
+    });
+  }
+
+  function formatAxisTimeLabel(unixSeconds) {
+    const d = new Date(unixSeconds * 1000);
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const mm = String(d.getUTCMinutes()).padStart(2, "0");
+    const ss = String(d.getUTCSeconds()).padStart(2, "0");
+    return `${hh}:${mm}:${ss}`;
+  }
+
+  function drawTimeAxisLabels(c, w, h, pad, xmin, xmax, layout) {
+    const ticks = [xmin, (xmin + xmax) / 2, xmax];
+    c.fillStyle = "#665c54";
+    c.font = layout.smallFont;
+    ticks.forEach((tick, index) => {
+      const x = pad.l + (tick - xmin) / Math.max(1e-9, xmax - xmin) * (w - pad.l - pad.r);
+      const label = formatAxisTimeLabel(tick);
+      const labelWidth = c.measureText(label).width;
+      let drawX = x - labelWidth / 2;
+      if (index === 0) drawX = pad.l;
+      if (index === 2) drawX = w - pad.r - labelWidth;
+      c.fillText(label, drawX, h - 10);
+    });
+  }
+
+  function drawAxes(c, w, h, pad, xmin, xmax, ymin, ymax, xlabel, ylabel, layout) {
+    c.strokeStyle = "#c9bcac";
+    c.lineWidth = 1;
+    c.strokeRect(pad.l, pad.t, w - pad.l - pad.r, h - pad.t - pad.b);
+    c.fillStyle = "#665c54";
+    c.font = layout.font;
+    for (let i = 0; i <= 4; i += 1) {
+      const y = pad.t + i * (h - pad.t - pad.b) / 4;
+      const val = ymax - i * (ymax - ymin) / 4;
+      c.strokeStyle = "rgba(0,0,0,0.08)";
+      c.beginPath(); c.moveTo(pad.l, y); c.lineTo(w - pad.r, y); c.stroke();
+      c.fillText(val.toFixed(1), 6, y + 4);
+    }
+    c.fillText(ylabel, 8, 12);
+    c.fillText(xlabel, w / 2 - 18, h - 24);
+    drawTimeAxisLabels(c, w, h, pad, xmin, xmax, layout);
+  }
+
+  function drawTimeMarker(c, w, h, pad, centerUnix, xmin, xmax) {
+    const x = pad.l + (centerUnix - xmin) / (xmax - xmin) * (w - pad.l - pad.r);
+    c.strokeStyle = "#111";
+    c.lineWidth = 1.2;
+    c.beginPath();
+    c.moveTo(x, pad.t);
+    c.lineTo(x, h - pad.b);
+    c.stroke();
+  }
+
+  function drawSpectrumPlot(canvasTarget, energy, forwardFlux, backwardFlux, options = {}) {
+    const canvas = resolveCanvas(canvasTarget);
+    resizeCanvas(canvas);
+    const c = canvas.getContext("2d");
+    const w = canvas.width, h = canvas.height;
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = "#fff";
+    c.fillRect(0, 0, w, h);
+    const layout = plotLayout(w, h, canvas === ui.focusPlot);
+    const pad = layout.pad;
+
+    const xLow = options.xRange?.[0] ?? 0.1;
+    const xHigh = options.xRange?.[1] ?? 10000.0;
+    const yLow = options.yRange?.[0] ?? 1e3;
+    const yHigh = options.yRange?.[1] ?? 1e9;
+    const usableEnergy = (energy || []).filter((v) => finite(v) && v > 0);
+    if (!usableEnergy.length) {
+      drawNoData(c, w, h, "No spectrum available");
+      return;
+    }
+
+    const plotW = w - pad.l - pad.r;
+    const plotH = h - pad.t - pad.b;
+    const xMap = (value) => {
+      if (!(finite(value) && value > 0)) return null;
+      const t = (Math.log10(value) - Math.log10(xLow)) / (Math.log10(xHigh) - Math.log10(xLow));
+      return pad.l + t * plotW;
+    };
+    const yMap = (value) => {
+      if (!(finite(value) && value > 0)) return null;
+      const t = (Math.log10(value) - Math.log10(yLow)) / (Math.log10(yHigh) - Math.log10(yLow));
+      return pad.t + (1 - t) * plotH;
+    };
+
+    // Draw the three topology-rule energy bands first, so the spectra are
+    // plotted on top and remain readable.
+    (options.bands || []).forEach((band) => {
+      const xStart = xMap(band.range[0]);
+      const xEnd = xMap(band.range[1]);
+      if (xStart === null || xEnd === null) return;
+      c.fillStyle = band.color;
+      c.fillRect(Math.min(xStart, xEnd), pad.t, Math.abs(xEnd - xStart), plotH);
+    });
+
+    c.strokeStyle = "#c9bcac";
+    c.lineWidth = 1;
+    c.strokeRect(pad.l, pad.t, plotW, plotH);
+    c.fillStyle = "#665c54";
+    c.font = layout.font;
+    c.fillText("Differential energy flux", 8, 12);
+    c.fillText("Energy (eV)", w / 2 - 30, h - 24);
+
+    const xTicks = [0.1, 1, 10, 100, 1000, 10000].filter((v) => v >= xLow && v <= xHigh);
+    xTicks.forEach((tick) => {
+      const x = xMap(tick);
+      if (x === null) return;
+      c.strokeStyle = "rgba(0,0,0,0.08)";
+      c.beginPath();
+      c.moveTo(x, pad.t);
+      c.lineTo(x, h - pad.b);
+      c.stroke();
+      c.fillStyle = "#665c54";
+      c.font = layout.smallFont;
+      c.fillText(String(tick), x - c.measureText(String(tick)).width / 2, h - 10);
+    });
+    const yTicks = [1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9].filter((v) => v >= yLow && v <= yHigh);
+    yTicks.forEach((tick) => {
+      const y = yMap(tick);
+      if (y === null) return;
+      c.strokeStyle = "rgba(0,0,0,0.08)";
+      c.beginPath();
+      c.moveTo(pad.l, y);
+      c.lineTo(w - pad.r, y);
+      c.stroke();
+      c.fillStyle = "#665c54";
+      c.font = layout.smallFont;
+      c.fillText(`1e${Math.round(Math.log10(tick))}`, 4, y + 4);
+    });
+
+    // Small band legend in the upper-left corner of the spectrum plot.
+    let legendX = pad.l + 8;
+    (options.bands || []).forEach((band) => {
+      c.fillStyle = "rgba(255,250,241,0.92)";
+      c.fillRect(legendX - 4, pad.t + 6, 56, 18);
+      c.fillStyle = band.color.replace(/0\.\d+\)/, "0.65)");
+      c.fillRect(legendX, pad.t + 11, 12, 6);
+      c.fillStyle = "#433931";
+      c.font = layout.smallFont;
+      c.fillText(band.label, legendX + 16, pad.t + 17);
+      legendX += 60;
+    });
+
+    const traces = [
+      { label: "Pitch < 30 deg", color: "#cc4338", values: forwardFlux || [], marker: "circle" },
+      { label: "Pitch > 150 deg", color: "#2674c8", values: backwardFlux || [], marker: "square" },
+    ];
+    traces.forEach((trace) => {
+      c.strokeStyle = trace.color;
+      c.lineWidth = 1.7;
+      c.beginPath();
+      let started = false;
+      for (let i = 0; i < energy.length; i += 1) {
+        const px = xMap(energy[i]);
+        const py = yMap(trace.values[i]);
+        if (px === null || py === null) continue;
+        if (!started) {
+          c.moveTo(px, py);
+          started = true;
+        } else {
+          c.lineTo(px, py);
+        }
+      }
+      c.stroke();
+
+      for (let i = 0; i < energy.length; i += 1) {
+        const px = xMap(energy[i]);
+        const py = yMap(trace.values[i]);
+        if (px === null || py === null) continue;
+        c.fillStyle = trace.color;
+        if (trace.marker === "circle") {
+          c.beginPath();
+          c.arc(px, py, canvas === ui.focusPlot ? 4 : 2.5, 0, Math.PI * 2);
+          c.fill();
+        } else {
+          const s = canvas === ui.focusPlot ? 7 : 4;
+          c.fillRect(px - s / 2, py - s / 2, s, s);
+        }
+      }
+    });
+
+    drawTraceLegend(c, w, traces.map((trace) => ({ label: trace.label, color: trace.color })), layout);
+  }
+
+  function drawHeatmap(canvasTarget, legendTarget, matrix, xTimes, yValues, yLabel, options = {}) {
+    // Generic heatmap renderer shared by:
+    // - STATIC Energy
+    // - STATIC Mass
+    // - SWE PAD
+    // - SWE Energy
+    const canvas = resolveCanvas(canvasTarget);
+    resizeCanvas(canvas);
+    const c = canvas.getContext("2d");
+    const w = canvas.width, h = canvas.height;
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = "#fff";
+    c.fillRect(0, 0, w, h);
+    const layout = plotLayout(w, h, canvas === ui.focusPlot);
+    const pad = layout.pad;
+    if (!matrix.length || !yValues.length || !xTimes.length) { drawNoData(c, w, h, "No data in window"); drawLegend(legendTarget, NaN, NaN); return; }
+    const flat = [];
+    for (const row of matrix) for (const v of row) if (finite(v) && v > 0) flat.push(Math.log10(v));
+    if (!flat.length) { drawNoData(c, w, h, "No valid flux values"); drawLegend(legendTarget, NaN, NaN); return; }
+    const vmin = options.colorLogRange ? options.colorLogRange[0] : Math.min(...flat);
+    const vmax = options.colorLogRange ? options.colorLogRange[1] : Math.max(...flat);
+    const plotW = w - pad.l - pad.r, plotH = h - pad.t - pad.b;
+    const cellW = plotW / Math.max(1, xTimes.length);
+    const yMode = options.yMode || "linear";
+    const dataYMin = Math.min(...yValues.filter(finite));
+    const dataYMax = Math.max(...yValues.filter(finite));
+    const yRange = options.yRange || [dataYMin, dataYMax];
+    const yLow = yRange[0];
+    const yHigh = yRange[1];
+    const yMap = (value) => {
+      if (!finite(value)) return null;
+      if (yMode === "log") {
+        if (!(value > 0 && yLow > 0 && yHigh > yLow)) return null;
+        const t = (Math.log10(value) - Math.log10(yLow)) / (Math.log10(yHigh) - Math.log10(yLow));
+        return pad.t + (1 - t) * plotH;
+      }
+      if (!(yHigh > yLow)) return null;
+      const t = (value - yLow) / (yHigh - yLow);
+      return pad.t + (1 - t) * plotH;
+    };
+    const ySorted = yValues.map((value, index) => ({ value, index })).filter((item) => finite(item.value));
+    for (let ix = 0; ix < xTimes.length; ix += 1) {
+      for (let j = 0; j < ySorted.length; j += 1) {
+        const current = ySorted[j];
+        const next = ySorted[Math.min(j + 1, ySorted.length - 1)];
+        const row = matrix[ix] || [];
+        const v = row[current.index];
+        if (!(finite(v) && v > 0)) continue;
+        const lv = Math.log10(v);
+        c.fillStyle = palette((lv - vmin) / Math.max(1e-9, vmax - vmin));
+        const x = pad.l + ix * cellW;
+        const yTop = yMap(next.value);
+        const yBottom = yMap(current.value);
+        if (yTop === null || yBottom === null) continue;
+        const top = Math.min(yTop, yBottom);
+        const height = Math.max(1, Math.abs(yBottom - yTop));
+        c.fillRect(x, top, Math.ceil(cellW) + 1, height + 1);
+      }
+    }
+    c.strokeStyle = "#c9bcac";
+    c.strokeRect(pad.l, pad.t, plotW, plotH);
+    c.fillStyle = "#665c54";
+    c.font = layout.font;
+    c.fillText(yLabel, 8, 12);
+    c.fillText("Time", w / 2 - 18, h - 24);
+    const ticks = yMode === "log"
+      ? [yLow, 1, 10, 100, 1000, yHigh].filter((v, i, arr) => v >= yLow && v <= yHigh && arr.indexOf(v) === i)
+      : [yLow, (yLow + yHigh) / 2, yHigh];
+    ticks.forEach((tick) => {
+      const y = yMap(tick);
+      if (y === null) return;
+      c.strokeStyle = "rgba(0,0,0,0.08)";
+      c.beginPath();
+      c.moveTo(pad.l, y);
+      c.lineTo(w - pad.r, y);
+      c.stroke();
+      c.fillStyle = "#665c54";
+      const label = yMode === "log"
+        ? (tick < 1 ? tick.toFixed(1) : String(tick))
+        : tick.toFixed(0);
+      c.fillText(label, 4, y + 4);
+    });
+    const centerUnix = isoToUnix(state.samples[state.selectedIndex].target_time);
+    const xmin = xTimes[0], xmax = xTimes[xTimes.length - 1];
+    if (xmax > xmin) {
+      drawTimeMarker(c, w, h, pad, centerUnix, xmin, xmax);
+      drawTimeAxisLabels(c, w, h, pad, xmin, xmax, layout);
+    }
+    drawLegend(legendTarget, vmin, vmax);
+  }
+
+  function drawLegend(legendTarget, minVal, maxVal) {
+    const canvas = resolveCanvas(legendTarget);
+    if (!canvas) return;
+    resizeCanvas(canvas);
+    const c = canvas.getContext("2d");
+    const w = canvas.width, h = canvas.height;
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = "#fff";
+    c.fillRect(0, 0, w, h);
+    c.strokeStyle = "#d9ccbc";
+    c.strokeRect(0.5, 0.5, w - 1, h - 1);
+    if (!(finite(minVal) && finite(maxVal))) {
+      c.fillStyle = "#665c54";
+      c.font = "12px Segoe UI";
+      c.fillText("n/a", 14, h / 2);
+      return;
+    }
+    const barX = 10, barY = 12, barW = 18, barH = h - 24;
+    for (let i = 0; i < barH; i += 1) {
+      const t = 1 - i / Math.max(1, barH - 1);
+      c.fillStyle = palette(t);
+      c.fillRect(barX, barY + i, barW, 1);
+    }
+    c.strokeStyle = "#998877";
+    c.strokeRect(barX, barY, barW, barH);
+    c.fillStyle = "#433931";
+    c.font = "11px Segoe UI";
+    c.fillText(maxVal.toFixed(2), 32, barY + 4);
+    c.fillText(minVal.toFixed(2), 32, barY + barH);
+    c.save();
+    c.translate(w - 7, h / 2);
+    c.rotate(-Math.PI / 2);
+    c.fillText("log10(flux)", -28, 0);
+    c.restore();
+  }
+
+  function drawNoData(c, w, h, message) {
+    c.fillStyle = "#fff";
+    c.fillRect(0, 0, w, h);
+    c.fillStyle = "#786f67";
+    c.font = "14px Segoe UI";
+    c.fillText(message, 18, h / 2);
+  }
+
+  function renderPanelIntoFocus(panelKey) {
+    // When the user clicks a small right-side panel, we do not scale up the
+    // existing small bitmap. Instead, we re-render the chosen plot into the
+    // larger center canvas so text and axes stay sharp.
+    const overview = state.data?.context_overview || {};
+    const staticPart = overview.static;
+    const swePart = overview.swe;
+    const magPart = overview.mag;
+    const modelPart = overview.model_b_mso;
+
+    const showLegend = () => {
+      ui.focusBody.classList.remove("single");
+      ui.focusLegend.style.display = "block";
+    };
+    const hideLegend = () => {
+      ui.focusBody.classList.add("single");
+      ui.focusLegend.style.display = "none";
+    };
+
+    if (panelKey === "staticEnergy") {
+      showLegend();
+      if (staticPart) {
+        const p = panelWindow(staticPart);
+        drawHeatmap(ui.focusPlot, ui.focusLegend, p.indices.map((i) => staticPart.energy_eflux[i] || []), p.indices.map((i) => p.times[i]), staticPart.energy_eV || [], "Energy (eV)", FIXED_RANGES.staticEnergy);
+      } else {
+        drawHeatmap(ui.focusPlot, ui.focusLegend, [], [], [], "Energy (eV)", FIXED_RANGES.staticEnergy);
+      }
+      return;
+    }
+    if (panelKey === "staticMass") {
+      showLegend();
+      if (staticPart) {
+        const p = panelWindow(staticPart);
+        drawHeatmap(ui.focusPlot, ui.focusLegend, p.indices.map((i) => staticPart.mass_eflux[i] || []), p.indices.map((i) => p.times[i]), staticPart.mass_amu || [], "Mass (amu)", FIXED_RANGES.staticMass);
+      } else {
+        drawHeatmap(ui.focusPlot, ui.focusLegend, [], [], [], "Mass (amu)", FIXED_RANGES.staticMass);
+      }
+      return;
+    }
+    if (panelKey === "bmag") {
+      hideLegend();
+      if (magPart) {
+        const p = panelWindow(magPart);
+        const times = p.indices.map((i) => p.times[i]);
+        drawLinePlot(ui.focusPlot, [{ label: "|B|", color: lineColors.bmag, times, values: p.indices.map((i) => magPart.bmag_nT[i]) }], "nT", FIXED_RANGES.bmag);
+      } else {
+        drawLinePlot(ui.focusPlot, [], "nT", FIXED_RANGES.bmag);
+      }
+      return;
+    }
+    if (panelKey === "bvec") {
+      hideLegend();
+      if (magPart) {
+        const p = panelWindow(magPart);
+        const times = p.indices.map((i) => p.times[i]);
+        drawLinePlot(ui.focusPlot, [
+          { label: "Bx", color: lineColors.bx, times, values: p.indices.map((i) => magPart.bx_nT[i]) },
+          { label: "By", color: lineColors.by, times, values: p.indices.map((i) => magPart.by_nT[i]) },
+          { label: "Bz", color: lineColors.bz, times, values: p.indices.map((i) => magPart.bz_nT[i]) },
+        ], "nT", FIXED_RANGES.bvec);
+      } else {
+        drawLinePlot(ui.focusPlot, [], "nT", FIXED_RANGES.bvec);
+      }
+      return;
+    }
+    if (panelKey === "model") {
+      hideLegend();
+      if (modelPart?.available) {
+        const times = modelPart.times_unix || [];
+        const picked = withWindow(times, isoToUnix(state.samples[state.selectedIndex].target_time), overview.window_seconds || 600);
+        drawLinePlot(ui.focusPlot, [
+          { label: "Bx", color: lineColors.bx, times: picked.indices.map((i) => times[i]), values: picked.indices.map((i) => modelPart.bx_nT[i]) },
+          { label: "By", color: lineColors.by, times: picked.indices.map((i) => times[i]), values: picked.indices.map((i) => modelPart.by_nT[i]) },
+          { label: "Bz", color: lineColors.bz, times: picked.indices.map((i) => times[i]), values: picked.indices.map((i) => modelPart.bz_nT[i]) },
+        ], "nT", FIXED_RANGES.model);
+      } else {
+        drawLinePlot(ui.focusPlot, [], "nT", FIXED_RANGES.model);
+        const c = ui.focusPlot.getContext("2d");
+        c.fillStyle = "#665c54";
+        c.font = "14px Segoe UI";
+        c.fillText(modelPart?.message || "Model data unavailable.", 24, 36);
+      }
+      return;
+    }
+    if (panelKey === "swePad") {
+      showLegend();
+      if (swePart) {
+        const p = panelWindow(swePart);
+        drawHeatmap(ui.focusPlot, ui.focusLegend, p.indices.map((i) => swePart.pad_111_140_eflux[i] || []), p.indices.map((i) => p.times[i]), swePart.pitch_deg || [], "PAD (deg)", FIXED_RANGES.swePad);
+      } else {
+        drawHeatmap(ui.focusPlot, ui.focusLegend, [], [], [], "PAD (deg)", FIXED_RANGES.swePad);
+      }
+      return;
+    }
+    if (panelKey === "sweEnergy") {
+      showLegend();
+      if (swePart) {
+        const p = panelWindow(swePart);
+        drawHeatmap(ui.focusPlot, ui.focusLegend, p.indices.map((i) => swePart.omni_eflux[i] || []), p.indices.map((i) => p.times[i]), swePart.energy_eV || [], "Energy (eV)", FIXED_RANGES.sweEnergy);
+      } else {
+        drawHeatmap(ui.focusPlot, ui.focusLegend, [], [], [], "Energy (eV)", FIXED_RANGES.sweEnergy);
+      }
+      return;
+    }
+    if (panelKey === "spectrum") {
+      hideLegend();
+      const sample = state.samples[state.selectedIndex];
+      drawSpectrumPlot(
+        ui.focusPlot,
+        sample?.energy_eV || [],
+        sample?.forward_flux || [],
+        sample?.backward_flux || [],
+        FIXED_RANGES.spectrum,
+      );
+    }
+  }
+
+  function syncFocusedPanel() {
+    if (!state.focusedPanel) return;
+    renderPanelIntoFocus(state.focusedPanel.key);
+  }
+
+  function focusPanel(title, key, canvasId, legendId = null) {
+    state.focusedPanel = { title, key, canvasId, legendId };
+    ui.focusTitle.textContent = title;
+    ui.orbitStage.classList.add("hidden");
+    ui.focusStage.classList.remove("hidden");
+    syncFocusedPanel();
+  }
+
+  function showOrbitStage() {
+    state.focusedPanel = null;
+    ui.focusStage.classList.add("hidden");
+    ui.orbitStage.classList.remove("hidden");
+  }
+
+  function panelWindow(dataPart) {
+    const centerUnix = isoToUnix(state.samples[state.selectedIndex].target_time);
+    const seconds = state.data.context_overview?.window_seconds || 600;
+    const times = dataPart?.times_unix || [];
+    const picked = withWindow(times, centerUnix, seconds);
+    return { centerUnix, seconds, times, indices: picked.indices };
+  }
+
+  function renderPanels() {
+    // Draw all small right-side overview panels.
+    if (!state.data || !state.samples.length) {
+      drawHeatmap("staticEnergyCanvas", "staticEnergyLegend", [], [], [], "Energy (eV)", FIXED_RANGES.staticEnergy);
+      drawHeatmap("staticMassCanvas", "staticMassLegend", [], [], [], "Mass (amu)", FIXED_RANGES.staticMass);
+      drawLinePlot("magTotalCanvas", [], "nT", FIXED_RANGES.bmag);
+      drawLinePlot("magVectorCanvas", [], "nT", FIXED_RANGES.bvec);
+      drawLinePlot("modelCanvas", [], "nT", FIXED_RANGES.model);
+      drawHeatmap("swePadCanvas", "swePadLegend", [], [], [], "PAD (deg)", FIXED_RANGES.swePad);
+      drawHeatmap("sweEnergyCanvas", "sweEnergyLegend", [], [], [], "Energy (eV)", FIXED_RANGES.sweEnergy);
+      return;
+    }
+    const overview = state.data.context_overview || {};
+    const staticPart = overview.static;
+    const swePart = overview.swe;
+    const magPart = overview.mag;
+    const modelPart = overview.model_b_mso;
+
+    if (staticPart) {
+      const p = panelWindow(staticPart);
+      drawHeatmap("staticEnergyCanvas", "staticEnergyLegend", p.indices.map((i) => staticPart.energy_eflux[i] || []), p.indices.map((i) => p.times[i]), staticPart.energy_eV || [], "Energy (eV)", FIXED_RANGES.staticEnergy);
+      drawHeatmap("staticMassCanvas", "staticMassLegend", p.indices.map((i) => staticPart.mass_eflux[i] || []), p.indices.map((i) => p.times[i]), staticPart.mass_amu || [], "Mass (amu)", FIXED_RANGES.staticMass);
+    } else {
+      drawHeatmap("staticEnergyCanvas", "staticEnergyLegend", [], [], [], "Energy (eV)", FIXED_RANGES.staticEnergy);
+      drawHeatmap("staticMassCanvas", "staticMassLegend", [], [], [], "Mass (amu)", FIXED_RANGES.staticMass);
+    }
+
+    if (magPart) {
+      const p = panelWindow(magPart);
+      const times = p.indices.map((i) => p.times[i]);
+      drawLinePlot("magTotalCanvas", [{ label: "|B|", color: lineColors.bmag, times, values: p.indices.map((i) => magPart.bmag_nT[i]) }], "nT", FIXED_RANGES.bmag);
+      drawLinePlot("magVectorCanvas", [
+        { label: "Bx", color: lineColors.bx, times, values: p.indices.map((i) => magPart.bx_nT[i]) },
+        { label: "By", color: lineColors.by, times, values: p.indices.map((i) => magPart.by_nT[i]) },
+        { label: "Bz", color: lineColors.bz, times, values: p.indices.map((i) => magPart.bz_nT[i]) },
+      ], "nT", FIXED_RANGES.bvec);
+    } else {
+      drawLinePlot("magTotalCanvas", [], "nT", FIXED_RANGES.bmag);
+      drawLinePlot("magVectorCanvas", [], "nT", FIXED_RANGES.bvec);
+    }
+
+    if (modelPart?.available) {
+      const times = modelPart.times_unix || [];
+      const picked = withWindow(times, isoToUnix(state.samples[state.selectedIndex].target_time), overview.window_seconds || 600);
+      drawLinePlot("modelCanvas", [
+        { label: "Bx", color: lineColors.bx, times: picked.indices.map((i) => times[i]), values: picked.indices.map((i) => modelPart.bx_nT[i]) },
+        { label: "By", color: lineColors.by, times: picked.indices.map((i) => times[i]), values: picked.indices.map((i) => modelPart.by_nT[i]) },
+        { label: "Bz", color: lineColors.bz, times: picked.indices.map((i) => times[i]), values: picked.indices.map((i) => modelPart.bz_nT[i]) },
+      ], "nT", FIXED_RANGES.model);
+    } else {
+      drawLinePlot("modelCanvas", [], "nT", FIXED_RANGES.model);
+      const c = ctx("modelCanvas");
+      c.fillStyle = "#665c54";
+      c.font = "12px Segoe UI";
+      c.fillText(modelPart?.message || "Model data unavailable.", 18, 32);
+    }
+
+    if (swePart) {
+      const p = panelWindow(swePart);
+      drawHeatmap("swePadCanvas", "swePadLegend", p.indices.map((i) => swePart.pad_111_140_eflux[i] || []), p.indices.map((i) => p.times[i]), swePart.pitch_deg || [], "PAD (deg)", FIXED_RANGES.swePad);
+      drawHeatmap("sweEnergyCanvas", "sweEnergyLegend", p.indices.map((i) => swePart.omni_eflux[i] || []), p.indices.map((i) => p.times[i]), swePart.energy_eV || [], "Energy (eV)", FIXED_RANGES.sweEnergy);
+    } else {
+      drawHeatmap("swePadCanvas", "swePadLegend", [], [], [], "PAD (deg)", FIXED_RANGES.swePad);
+      drawHeatmap("sweEnergyCanvas", "sweEnergyLegend", [], [], [], "Energy (eV)", FIXED_RANGES.sweEnergy);
+    }
+    const sample = state.samples[state.selectedIndex];
+    drawSpectrumPlot(
+      "directionalSpectrumCanvas",
+      sample?.energy_eV || [],
+      sample?.forward_flux || [],
+      sample?.backward_flux || [],
+      FIXED_RANGES.spectrum,
+    );
+    syncFocusedPanel();
+  }
+
+  function updateSelection() {
+    // Keep time controls and stage labels synchronized with the selected index.
+    if (!state.samples.length) return;
+    const s = state.samples[state.selectedIndex];
+    ui.timeLabel.textContent = s.target_time;
+    ui.timeInput.value = s.target_time;
+    ui.slider.value = String(state.selectedIndex);
+    ui.viewerMeta.textContent = `Frame: ${ui.frame.selectedOptions[0].textContent} | Selected: ${s.target_time}`;
+    persistViewerState();
+  }
+
+  function setSelectedIndex(index) {
+    state.selectedIndex = clamp(index, 0, Math.max(0, state.samples.length - 1));
+    updateSelection();
+    drawViewer();
+    renderPanels();
+  }
+
+  function resetView() {
+    state.rotationX = 0.55;
+    state.rotationY = -0.9;
+    state.zoom = 2.6;
+    drawViewer();
+  }
+
+  function loadFromText(text) {
+    const parsed = JSON.parse(text);
+    state.data = parsed;
+    state.samples = parsed.samples || [];
+    if (!state.samples.length) throw new Error("No samples were found in this JSON file.");
+    state.frame = parsed.default_coordinate_frame || "ss";
+    ui.frame.value = state.frame;
+    ui.slider.max = String(Math.max(0, state.samples.length - 1));
+    ui.slider.value = "0";
+    setSelectedIndex(0);
+    persistViewerState(text);
+    setStatus(`Loaded ${state.samples.length} samples.`);
+  }
+
+  function jumpToTime() {
+    if (!state.samples.length) return;
+    const targetUnix = isoToUnix(ui.timeInput.value.trim());
+    if (!finite(targetUnix)) {
+      setStatus("Time parse failed. Use ISO format like 2015-01-05T07:45:00+00:00.");
+      return;
+    }
+    const times = state.samples.map((s) => isoToUnix(s.target_time));
+    setSelectedIndex(nearestIndex(times, targetUnix));
+    setStatus(`Moved to nearest sample for ${ui.timeInput.value.trim()}.`);
+  }
+
+  ui.load.addEventListener("click", async () => {
+    if (!ui.file.files.length) { setStatus("Choose a topology_summary.json file first."); return; }
+    try {
+      const text = await ui.file.files[0].text();
+      loadFromText(text);
+    } catch (error) {
+      setStatus(`Load failed: ${error.message}`);
+    }
+  });
+
+  ui.frame.addEventListener("change", () => {
+    state.frame = ui.frame.value;
+    updateSelection();
+    drawViewer();
+  });
+  ui.reset.addEventListener("click", resetView);
+  ui.slider.addEventListener("input", () => setSelectedIndex(Number(ui.slider.value)));
+  ui.jumpTime.addEventListener("click", jumpToTime);
+  ui.timeInput.addEventListener("keydown", (event) => { if (event.key === "Enter") jumpToTime(); });
+  window.addEventListener("resize", () => { drawViewer(); renderPanels(); syncFocusedPanel(); });
+  document.querySelectorAll(".panel").forEach((panel) => {
+    panel.addEventListener("click", () => {
+      focusPanel(panel.dataset.panelTitle || "Focused Plot", panel.dataset.panelKey, panel.dataset.sourceCanvas, panel.dataset.sourceLegend || null);
+    });
+  });
+  ui.focusBack.addEventListener("click", showOrbitStage);
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.focusedPanel) showOrbitStage();
+  });
+
+  ui.viewer.addEventListener("mousedown", (event) => {
+    // Dragging only affects the orbit stage; focused data plots are static.
+    state.drag = { x: event.clientX, y: event.clientY, rx: state.rotationX, ry: state.rotationY };
+  });
+  window.addEventListener("mouseup", () => { state.drag = null; });
+  window.addEventListener("mousemove", (event) => {
+    if (!state.drag) return;
+    state.rotationY = state.drag.ry + (event.clientX - state.drag.x) * 0.01;
+    state.rotationX = clamp(state.drag.rx + (event.clientY - state.drag.y) * 0.01, -1.4, 1.4);
+    drawViewer();
+  });
+  ui.viewer.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const zoomFactor = event.deltaY > 0 ? 1.12 : 0.88;
+    state.zoom = clamp(state.zoom * zoomFactor, 0.35, 12.0);
+    drawViewer();
+  }, { passive: false });
+  ui.viewer.addEventListener("click", (event) => {
+    if (!state.pickPoints.length) return;
+    const rect = ui.viewer.getBoundingClientRect();
+    const x = (event.clientX - rect.left) * (ui.viewer.width / rect.width);
+    const y = (event.clientY - rect.top) * (ui.viewer.height / rect.height);
+    let best = -1;
+    let bestDist = 20 * (window.devicePixelRatio || 1);
+    state.pickPoints.forEach((item) => {
+      const d = Math.hypot(item.p.x - x, item.p.y - y);
+      if (d < bestDist) { bestDist = d; best = item.i; }
+    });
+    if (best >= 0) setSelectedIndex(best);
+  });
+  window.addEventListener("resize", () => {
+    enforcePaneWidthBounds();
+    persistPaneWidths();
+    drawViewer();
+    renderPanels();
+    syncFocusedPanel();
+  });
+
+  if (sessionStorage.getItem("maven_topology_json")) {
+    ui.details.setAttribute("aria-disabled", "false");
+  }
+  restorePaneWidths();
+  enforcePaneWidthBounds();
+  setupPaneResizer(ui.leftSplitter, "left");
+  setupPaneResizer(ui.rightSplitter, "right");
+  drawViewer();
+  renderPanels();
+})();
+</script>
+</body>
+</html>
