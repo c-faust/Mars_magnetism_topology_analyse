@@ -1,0 +1,936 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MAVEN Topology Data Panels</title>
+<!--
+  Standalone data-panel page.
+
+  Purpose:
+  - separate the right-side data column from the main orbit page
+  - keep the same time-navigation workflow
+  - work either from cached main-viewer state or from a user-picked JSON file
+-->
+<style>
+  :root {
+    --bg: #f4efe4;
+    --panel: #fffaf1;
+    --ink: #1f1a17;
+    --muted: #6b625a;
+    --line: #d3c7b8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    height: 100vh;
+    overflow: hidden;
+    font-family: "Segoe UI", Tahoma, sans-serif;
+    color: var(--ink);
+    background: radial-gradient(circle at top left, #fff8ec 0%, #f4efe4 40%, #efe6d7 100%);
+  }
+  .page {
+    height: 100vh;
+    padding: 8px;
+    display: grid;
+    grid-template-rows: auto auto 1fr;
+    gap: 6px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: 0 10px 28px rgba(50, 36, 20, 0.08);
+  }
+  .toolbar {
+    padding: 10px 12px;
+    display: grid;
+    grid-template-columns: minmax(240px, 340px) minmax(140px, 180px) 110px 110px 1fr;
+    gap: 8px;
+    align-items: center;
+  }
+  .timeline {
+    padding: 10px 12px;
+    display: grid;
+    grid-template-columns: 1fr minmax(230px, 320px) 140px 110px;
+    gap: 8px;
+    align-items: end;
+  }
+  .panels {
+    min-height: 0;
+    padding: 4px;
+    display: grid;
+    grid-template-rows: 1.02fr 1.02fr 0.78fr 0.78fr 0.78fr 0.78fr 1.0fr 1.0fr 1.12fr;
+    gap: 2px;
+  }
+  .field {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+  .field label,
+  .small {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  h1, h2, h3, p { margin: 0; }
+  h1 { font-size: 20px; }
+  input[type="file"], input[type="text"], button, input[type="range"] { width: 100%; }
+  input[type="text"], button {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 8px 10px;
+    background: white;
+    color: var(--ink);
+  }
+  button {
+    cursor: pointer;
+    background: #f3e1cf;
+    border-color: #d4bfa9;
+    font-weight: 600;
+  }
+  button:hover { background: #ecd5bf; }
+  .links {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+  .link-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 120px;
+    text-decoration: none;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 8px 10px;
+    background: #f7efe5;
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .status {
+    min-height: 18px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .time-readout {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 8px 10px;
+    background: rgba(255,255,255,0.8);
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .panel {
+    padding: 0;
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
+    border-radius: 8px;
+    overflow: hidden;
+    min-height: 0;
+  }
+  .panel-head {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+    padding: 4px 4px 4px 6px;
+    border-right: 1px solid #e3d9cb;
+    background: #f8f1e8;
+    min-height: 0;
+  }
+  .panel-head h3 {
+    font-size: 11.5px;
+    line-height: 1.05;
+    font-weight: 700;
+  }
+  .panel-head span {
+    font-size: 9.5px;
+    color: var(--muted);
+    line-height: 1.05;
+  }
+  .plot-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 28px;
+    gap: 2px;
+    align-items: stretch;
+    padding: 1px 1px 1px 2px;
+    background: #fff;
+    min-height: 0;
+  }
+  canvas.plot {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    border-radius: 4px;
+    background: #fff;
+    border: 1px solid #ddd0c0;
+  }
+  canvas.legend {
+    width: 28px;
+    height: 100%;
+    border-radius: 4px;
+    background: #fff;
+    border: 1px solid #ddd0c0;
+  }
+  @media (max-width: 1000px) {
+    body { height: auto; overflow: auto; }
+    .page { height: auto; grid-template-rows: auto auto auto; }
+    .toolbar, .timeline { grid-template-columns: 1fr; }
+    .panels { height: auto; grid-template-rows: repeat(9, minmax(120px, auto)); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <section class="card toolbar">
+    <div>
+      <h1>MAVEN Topology Data Panels</h1>
+      <p class="small">Standalone data view with linked time navigation.</p>
+    </div>
+    <div class="field">
+      <label for="jsonFile">Topology JSON</label>
+      <input id="jsonFile" type="file" accept=".json">
+    </div>
+    <button id="loadButton" type="button">Load File</button>
+    <button id="reloadCacheButton" type="button">Load Cache</button>
+    <div class="links">
+      <a class="link-btn" href="magnetic_topology_viewer.html" target="_blank" rel="noopener">Open Viewer</a>
+      <a class="link-btn" href="magnetic_topology_details.html" target="_blank" rel="noopener">Open Details</a>
+    </div>
+  </section>
+
+  <section class="card timeline">
+    <div class="field">
+      <label for="timeSlider">Time Navigation</label>
+      <input id="timeSlider" type="range" min="0" max="0" step="1" value="0">
+      <div id="status" class="status">Trying cached data from the main viewer.</div>
+    </div>
+    <div class="field">
+      <label for="timeInput">Time (ISO)</label>
+      <input id="timeInput" type="text" placeholder="2015-01-05T07:45:00+00:00">
+    </div>
+    <div class="field">
+      <label>Selected time</label>
+      <div id="selectedTimeLabel" class="time-readout">No sample selected.</div>
+    </div>
+    <button id="jumpTimeButton" type="button">Jump To Time</button>
+  </section>
+
+  <section class="card panels">
+    <section class="card panel">
+      <div class="panel-head"><h3>STATIC<br>Energy</h3><span>eflux</span></div>
+      <div class="plot-row"><canvas class="plot" id="staticEnergyCanvas"></canvas><canvas class="legend" id="staticEnergyLegend"></canvas></div>
+    </section>
+    <section class="card panel">
+      <div class="panel-head"><h3>STATIC<br>Mass</h3><span>eflux</span></div>
+      <div class="plot-row"><canvas class="plot" id="staticMassCanvas"></canvas><canvas class="legend" id="staticMassLegend"></canvas></div>
+    </section>
+    <section class="card panel">
+      <div class="panel-head"><h3>|B|</h3><span>MAG</span></div>
+      <div class="plot-row"><canvas class="plot" id="magTotalCanvas"></canvas></div>
+    </section>
+    <section class="card panel">
+      <div class="panel-head"><h3>B_MSO</h3><span>Bx By Bz</span></div>
+      <div class="plot-row"><canvas class="plot" id="magVectorCanvas"></canvas></div>
+    </section>
+    <section class="card panel">
+      <div class="panel-head"><h3>Model<br>B_MSO</h3><span>Bx By Bz</span></div>
+      <div class="plot-row"><canvas class="plot" id="modelCanvas"></canvas></div>
+    </section>
+    <section class="card panel">
+      <div class="panel-head"><h3>Altitude</h3><span>km</span></div>
+      <div class="plot-row"><canvas class="plot" id="altitudeCanvas"></canvas></div>
+    </section>
+    <section class="card panel">
+      <div class="panel-head"><h3>SWE PAD</h3><span>111-140 eV</span></div>
+      <div class="plot-row"><canvas class="plot" id="swePadCanvas"></canvas><canvas class="legend" id="swePadLegend"></canvas></div>
+    </section>
+    <section class="card panel">
+      <div class="panel-head"><h3>SWE<br>Energy</h3><span>eflux</span></div>
+      <div class="plot-row"><canvas class="plot" id="sweEnergyCanvas"></canvas><canvas class="legend" id="sweEnergyLegend"></canvas></div>
+    </section>
+    <section class="card panel">
+      <div class="panel-head"><h3>Electron<br>Spectra</h3><span>F / B</span></div>
+      <div class="plot-row"><canvas class="plot" id="directionalSpectrumCanvas"></canvas></div>
+    </section>
+  </section>
+</div>
+<script>
+(() => {
+  const state = {
+    data: null,
+    samples: [],
+    selectedIndex: 0,
+  };
+
+  const ui = {
+    file: document.getElementById("jsonFile"),
+    load: document.getElementById("loadButton"),
+    reload: document.getElementById("reloadCacheButton"),
+    slider: document.getElementById("timeSlider"),
+    timeInput: document.getElementById("timeInput"),
+    timeLabel: document.getElementById("selectedTimeLabel"),
+    jumpTime: document.getElementById("jumpTimeButton"),
+    status: document.getElementById("status"),
+  };
+
+  const lineColors = { bx: "#cc4338", by: "#2674c8", bz: "#3a8a53", bmag: "#6e5b4f" };
+  const MARS_RADIUS_KM = 3389.5;
+  const FIXED_RANGES = {
+    staticEnergy: { yMode: "log", yRange: [0.1, 10000.0], colorLogRange: [3.0, 9.0] },
+    staticMass: { yMode: "linear", yRange: null, colorLogRange: [3.0, 9.0] },
+    swePad: {
+      yMode: "linear",
+      yRange: [0.0, 180.0],
+      colorScale: "linear",
+      colorRange: [0.6, 1.4],
+      legendLabel: "norm. eflux",
+      paletteStops: [
+        [70, 0, 130],
+        [40, 70, 255],
+        [0, 180, 255],
+        [0, 220, 120],
+        [190, 235, 0],
+        [255, 180, 0],
+        [255, 30, 0],
+      ],
+    },
+    sweEnergy: { yMode: "log", yRange: [0.1, 10000.0], colorLogRange: [3.0, 9.0] },
+    spectrum: {
+      xRange: [0.1, 10000.0],
+      yRange: [1e3, 1e9],
+      bands: [
+        { label: "knee", range: [50.0, 70.0], color: "rgba(204, 67, 56, 0.14)" },
+        { label: "auger", range: [180.0, 320.0], color: "rgba(38, 116, 200, 0.12)" },
+        { label: "dropoff", range: [550.0, 900.0], color: "rgba(58, 138, 83, 0.12)" },
+      ],
+    },
+    bmag: { yRange: [0.0, 50.0] },
+    bvec: { yRange: [-50.0, 50.0] },
+    model: { yRange: [-30.0, 30.0] },
+    altitude: { yRange: null },
+  };
+
+  function setStatus(text) { ui.status.textContent = text; }
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function finite(v) { return Number.isFinite(v); }
+  function sampleAltitudeKm(sample) {
+    if (!sample) return NaN;
+    if (finite(sample.altitude_km)) return Number(sample.altitude_km);
+    const posKm = Array.isArray(sample.position_km) ? sample.position_km : null;
+    if (posKm && posKm.length === 3 && posKm.every(finite)) {
+      return Math.hypot(posKm[0], posKm[1], posKm[2]) - MARS_RADIUS_KM;
+    }
+    const posRm = Array.isArray(sample.position_rm) ? sample.position_rm : null;
+    if (posRm && posRm.length === 3 && posRm.every(finite)) {
+      return (Math.hypot(posRm[0], posRm[1], posRm[2]) - 1.0) * MARS_RADIUS_KM;
+    }
+    return NaN;
+  }
+  function isoToUnix(text) { const t = Date.parse(text); return Number.isFinite(t) ? t / 1000 : NaN; }
+  function formatAxisTimeLabel(unixSeconds) {
+    const d = new Date(unixSeconds * 1000);
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const mm = String(d.getUTCMinutes()).padStart(2, "0");
+    const ss = String(d.getUTCSeconds()).padStart(2, "0");
+    return `${hh}:${mm}:${ss}`;
+  }
+  function resolveCanvas(target) {
+    return typeof target === "string" ? document.getElementById(target) : target;
+  }
+  function resizeCanvas(canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    const width = Math.max(1, Math.round(rect.width * ratio));
+    const height = Math.max(1, Math.round(rect.height * ratio));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+  }
+  function colorFromStops(t, stops) {
+    const c = clamp(t, 0, 1);
+    const p = c * (stops.length - 1);
+    const i = Math.floor(p);
+    const f = p - i;
+    const a = stops[i];
+    const b = stops[Math.min(i + 1, stops.length - 1)];
+    const rgb = a.map((v, idx) => Math.round(v + (b[idx] - v) * f));
+    return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+  }
+  function palette(t) {
+    return colorFromStops(t, [
+      [10, 26, 68],
+      [31, 92, 143],
+      [54, 144, 192],
+      [120, 179, 131],
+      [232, 191, 92],
+      [202, 96, 62],
+      [120, 22, 31],
+    ]);
+  }
+  function withWindow(times, centerUnix, seconds) {
+    const start = centerUnix - seconds;
+    const end = centerUnix + seconds;
+    const indices = [];
+    for (let i = 0; i < times.length; i += 1) {
+      if (times[i] >= start && times[i] <= end) indices.push(i);
+    }
+    return { start, end, indices };
+  }
+  function nearestIndex(times, targetUnix) {
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < times.length; i += 1) {
+      const dist = Math.abs(times[i] - targetUnix);
+      if (dist < bestDist) { best = i; bestDist = dist; }
+    }
+    return best;
+  }
+  function plotLayout() {
+    return {
+      pad: { l: 66, r: 18, t: 16, b: 30 },
+      font: "13px Segoe UI",
+      smallFont: "12px Segoe UI",
+    };
+  }
+  function drawNoData(c, w, h, message) {
+    c.fillStyle = "#fff";
+    c.fillRect(0, 0, w, h);
+    c.fillStyle = "#786f67";
+    c.font = "15px Segoe UI";
+    c.fillText(message, 18, h / 2);
+  }
+  function drawTimeAxisLabels(c, w, h, pad, xmin, xmax, layout) {
+    const ticks = [xmin, (xmin + xmax) / 2, xmax];
+    c.fillStyle = "#665c54";
+    c.font = layout.smallFont;
+    ticks.forEach((tick, index) => {
+      const x = pad.l + (tick - xmin) / Math.max(1e-9, xmax - xmin) * (w - pad.l - pad.r);
+      const label = formatAxisTimeLabel(tick);
+      const labelWidth = c.measureText(label).width;
+      let drawX = x - labelWidth / 2;
+      if (index === 0) drawX = pad.l;
+      if (index === 2) drawX = w - pad.r - labelWidth;
+      c.fillText(label, drawX, h - 10);
+    });
+  }
+  function drawAxes(c, w, h, pad, xmin, xmax, ymin, ymax, xlabel, ylabel, layout) {
+    c.strokeStyle = "#c9bcac";
+    c.lineWidth = 1;
+    c.strokeRect(pad.l, pad.t, w - pad.l - pad.r, h - pad.t - pad.b);
+    c.fillStyle = "#665c54";
+    c.font = layout.font;
+    for (let i = 0; i <= 4; i += 1) {
+      const y = pad.t + i * (h - pad.t - pad.b) / 4;
+      const val = ymax - i * (ymax - ymin) / 4;
+      c.strokeStyle = "rgba(0,0,0,0.08)";
+      c.beginPath();
+      c.moveTo(pad.l, y);
+      c.lineTo(w - pad.r, y);
+      c.stroke();
+      c.fillText(val.toFixed(1), 6, y + 4);
+    }
+    c.fillText(ylabel, 8, 12);
+    c.fillText(xlabel, w / 2 - 18, h - 24);
+    drawTimeAxisLabels(c, w, h, pad, xmin, xmax, layout);
+  }
+  function drawTimeMarker(c, h, pad, centerUnix, xmin, xmax, width) {
+    const x = pad.l + (centerUnix - xmin) / (xmax - xmin) * (width - pad.l - pad.r);
+    c.strokeStyle = "#111";
+    c.lineWidth = 1.2;
+    c.beginPath();
+    c.moveTo(x, pad.t);
+    c.lineTo(x, h - pad.b);
+    c.stroke();
+  }
+  function drawTraceLegend(c, w, traces, layout) {
+    c.font = layout.smallFont;
+    let x = w - 10;
+    traces.slice().reverse().forEach((trace) => {
+      const labelW = c.measureText(trace.label).width + 28;
+      x -= labelW;
+      c.fillStyle = "rgba(255,250,241,0.9)";
+      c.fillRect(x, 8, labelW, 18);
+      c.fillStyle = trace.color;
+      c.fillRect(x + 6, 13, 12, 3);
+      c.fillStyle = "#333";
+      c.fillText(trace.label, x + 22, 21);
+    });
+  }
+  function normalizePadMatrix(matrix) {
+    return (matrix || []).map((row) => {
+      const values = Array.isArray(row) ? row : [];
+      const valid = values.filter((v) => finite(v) && v > 0);
+      if (!valid.length) return values.map(() => NaN);
+      const mean = valid.reduce((sum, value) => sum + value, 0) / valid.length;
+      if (!(finite(mean) && mean > 0)) return values.map(() => NaN);
+      return values.map((value) => (finite(value) && value > 0 ? value / mean : NaN));
+    });
+  }
+  function drawLinePlot(canvasTarget, traces, yLabel, options = {}) {
+    const canvas = resolveCanvas(canvasTarget);
+    resizeCanvas(canvas);
+    const c = canvas.getContext("2d");
+    const w = canvas.width, h = canvas.height;
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = "#fff";
+    c.fillRect(0, 0, w, h);
+    const layout = plotLayout();
+    const pad = layout.pad;
+    const centerUnix = isoToUnix(state.samples[state.selectedIndex]?.target_time || "");
+    const halfWindow = state.data?.context_overview?.window_seconds || 600;
+    const x0 = centerUnix - halfWindow, x1 = centerUnix + halfWindow;
+    const arrays = traces.flatMap((t) => t.values.filter(finite));
+    if (!arrays.length) { drawNoData(c, w, h, "No data in window"); return; }
+    const ymin = Math.min(...arrays), ymax = Math.max(...arrays);
+    const yLow = options.yRange ? options.yRange[0] : (ymin === ymax ? ymin - 1 : ymin);
+    const yHigh = options.yRange ? options.yRange[1] : (ymin === ymax ? ymax + 1 : ymax);
+    drawAxes(c, w, h, pad, x0, x1, yLow, yHigh, "Time", yLabel, layout);
+    const xMap = (v) => pad.l + (v - x0) / (x1 - x0) * (w - pad.l - pad.r);
+    const yMap = (v) => h - pad.b - (v - yLow) / (yHigh - yLow) * (h - pad.t - pad.b);
+    traces.forEach((trace) => {
+      c.strokeStyle = trace.color;
+      c.lineWidth = 1.7;
+      c.beginPath();
+      let started = false;
+      for (let i = 0; i < trace.times.length; i += 1) {
+        const yv = trace.values[i];
+        if (!finite(yv)) continue;
+        const px = xMap(trace.times[i]), py = yMap(yv);
+        if (!started) { c.moveTo(px, py); started = true; } else { c.lineTo(px, py); }
+      }
+      c.stroke();
+    });
+    drawTimeMarker(c, h, pad, centerUnix, x0, x1, w);
+    drawTraceLegend(c, w, traces, layout);
+  }
+  function drawLegend(legendTarget, minVal, maxVal, options = {}) {
+    const canvas = resolveCanvas(legendTarget);
+    if (!canvas) return;
+    resizeCanvas(canvas);
+    const c = canvas.getContext("2d");
+    const w = canvas.width, h = canvas.height;
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = "#fff";
+    c.fillRect(0, 0, w, h);
+    c.strokeStyle = "#d9ccbc";
+    c.strokeRect(0.5, 0.5, w - 1, h - 1);
+    if (!(finite(minVal) && finite(maxVal))) {
+      c.fillStyle = "#665c54";
+      c.font = "13px Segoe UI";
+      c.fillText("n/a", 14, h / 2);
+      return;
+    }
+    const barX = 10, barY = 12, barW = 18, barH = h - 24;
+    for (let i = 0; i < barH; i += 1) {
+      const t = 1 - i / Math.max(1, barH - 1);
+      c.fillStyle = colorFromStops(t, options.paletteStops || [
+        [10, 26, 68],
+        [31, 92, 143],
+        [54, 144, 192],
+        [120, 179, 131],
+        [232, 191, 92],
+        [202, 96, 62],
+        [120, 22, 31],
+      ]);
+      c.fillRect(barX, barY + i, barW, 1);
+    }
+    c.strokeStyle = "#998877";
+    c.strokeRect(barX, barY, barW, barH);
+    c.fillStyle = "#433931";
+    c.font = "12px Segoe UI";
+    c.fillText(maxVal.toFixed(2), 32, barY + 4);
+    c.fillText(minVal.toFixed(2), 32, barY + barH);
+    c.save();
+    c.translate(w - 7, h / 2);
+    c.rotate(-Math.PI / 2);
+    c.fillText(options.legendLabel || "log10(flux)", -28, 0);
+    c.restore();
+  }
+  function drawHeatmap(canvasTarget, legendTarget, matrix, xTimes, yValues, yLabel, options = {}) {
+    const canvas = resolveCanvas(canvasTarget);
+    resizeCanvas(canvas);
+    const c = canvas.getContext("2d");
+    const w = canvas.width, h = canvas.height;
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = "#fff";
+    c.fillRect(0, 0, w, h);
+    const layout = plotLayout();
+    const pad = layout.pad;
+    const yMode = options.yMode || "linear";
+    const colorScale = options.colorScale || "log";
+    if (!matrix.length || !yValues.length || !xTimes.length) {
+      drawNoData(c, w, h, "No data in window");
+      drawLegend(legendTarget, NaN, NaN, options);
+      return;
+    }
+    const flat = matrix.flat().filter((v) => finite(v) && (colorScale === "linear" || v > 0));
+    if (!flat.length) {
+      drawNoData(c, w, h, "No valid flux values");
+      drawLegend(legendTarget, NaN, NaN, options);
+      return;
+    }
+    const scaledVals = colorScale === "log" ? flat.map((v) => Math.log10(v)) : flat;
+    const vmin = options.colorRange ? options.colorRange[0] : (options.colorLogRange ? options.colorLogRange[0] : Math.min(...scaledVals));
+    const vmax = options.colorRange ? options.colorRange[1] : (options.colorLogRange ? options.colorLogRange[1] : Math.max(...scaledVals));
+    const x0 = xTimes[0], x1 = xTimes[xTimes.length - 1];
+    const validY = yValues.filter((v) => finite(v) && (yMode === "linear" || v > 0));
+    const yLow = options.yRange ? options.yRange[0] : Math.min(...validY);
+    const yHigh = options.yRange ? options.yRange[1] : Math.max(...validY);
+    const plotW = w - pad.l - pad.r;
+    const plotH = h - pad.t - pad.b;
+    const xMap = (v) => pad.l + (v - x0) / Math.max(1e-9, x1 - x0) * plotW;
+    const yMap = (v) => {
+      if (!(finite(v) && (yMode === "linear" || v > 0))) return null;
+      if (yMode === "log") {
+        const t = (Math.log10(v) - Math.log10(yLow)) / Math.max(1e-9, Math.log10(yHigh) - Math.log10(yLow));
+        return pad.t + (1 - t) * plotH;
+      }
+      const t = (v - yLow) / Math.max(1e-9, yHigh - yLow);
+      return pad.t + (1 - t) * plotH;
+    };
+    const cellW = plotW / Math.max(1, xTimes.length);
+    const cellH = plotH / Math.max(1, yValues.length);
+    for (let xi = 0; xi < xTimes.length; xi += 1) {
+      for (let yi = 0; yi < yValues.length; yi += 1) {
+        const value = matrix[xi]?.[yi];
+        if (!finite(value)) continue;
+        if (colorScale === "log" && !(value > 0)) continue;
+        const scaledValue = colorScale === "log" ? Math.log10(value) : value;
+        const t = (scaledValue - vmin) / Math.max(1e-9, vmax - vmin);
+        const px = xMap(xTimes[xi]);
+        const py = yMap(yValues[yi]);
+        if (py === null) continue;
+        c.fillStyle = colorFromStops(t, options.paletteStops || [
+          [10, 26, 68],
+          [31, 92, 143],
+          [54, 144, 192],
+          [120, 179, 131],
+          [232, 191, 92],
+          [202, 96, 62],
+          [120, 22, 31],
+        ]);
+        c.fillRect(px, py - cellH, cellW + 1, cellH + 1);
+      }
+    }
+    c.strokeStyle = "#c9bcac";
+    c.lineWidth = 1;
+    c.strokeRect(pad.l, pad.t, plotW, plotH);
+    c.fillStyle = "#665c54";
+    c.font = layout.font;
+    c.fillText(yLabel, 8, 12);
+    c.fillText("Time", w / 2 - 18, h - 24);
+    const ticks = yMode === "log"
+      ? [0.1, 1, 10, 100, 1000, 10000].filter((tick) => tick >= yLow && tick <= yHigh)
+      : [yLow, (yLow + yHigh) / 2, yHigh];
+    ticks.forEach((tick) => {
+      const y = yMap(tick);
+      if (y === null) return;
+      c.strokeStyle = "rgba(0,0,0,0.08)";
+      c.beginPath();
+      c.moveTo(pad.l, y);
+      c.lineTo(w - pad.r, y);
+      c.stroke();
+      c.fillStyle = "#665c54";
+      c.font = layout.smallFont;
+      const label = yMode === "log" ? (tick < 1 ? tick.toFixed(1) : String(tick)) : tick.toFixed(0);
+      c.fillText(label, 4, y + 4);
+    });
+    drawTimeAxisLabels(c, w, h, pad, x0, x1, layout);
+    drawLegend(legendTarget, vmin, vmax, options);
+  }
+  function drawSpectrumPlot(canvasTarget, energy, forwardFlux, backwardFlux, options = {}) {
+    const canvas = resolveCanvas(canvasTarget);
+    resizeCanvas(canvas);
+    const c = canvas.getContext("2d");
+    const w = canvas.width, h = canvas.height;
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = "#fff";
+    c.fillRect(0, 0, w, h);
+    const layout = plotLayout();
+    const pad = layout.pad;
+    const xLow = options.xRange?.[0] ?? 0.1;
+    const xHigh = options.xRange?.[1] ?? 10000.0;
+    const yLow = options.yRange?.[0] ?? 1e3;
+    const yHigh = options.yRange?.[1] ?? 1e9;
+    const usableEnergy = (energy || []).filter((v) => finite(v) && v > 0);
+    if (!usableEnergy.length) {
+      drawNoData(c, w, h, "No spectrum available");
+      return;
+    }
+    const plotW = w - pad.l - pad.r;
+    const plotH = h - pad.t - pad.b;
+    const xMap = (value) => {
+      if (!(finite(value) && value > 0)) return null;
+      const t = (Math.log10(value) - Math.log10(xLow)) / (Math.log10(xHigh) - Math.log10(xLow));
+      return pad.l + t * plotW;
+    };
+    const yMap = (value) => {
+      if (!(finite(value) && value > 0)) return null;
+      const t = (Math.log10(value) - Math.log10(yLow)) / (Math.log10(yHigh) - Math.log10(yLow));
+      return pad.t + (1 - t) * plotH;
+    };
+    (options.bands || []).forEach((band) => {
+      const xStart = xMap(band.range[0]);
+      const xEnd = xMap(band.range[1]);
+      if (xStart === null || xEnd === null) return;
+      c.fillStyle = band.color;
+      c.fillRect(Math.min(xStart, xEnd), pad.t, Math.abs(xEnd - xStart), plotH);
+    });
+    c.strokeStyle = "#c9bcac";
+    c.lineWidth = 1;
+    c.strokeRect(pad.l, pad.t, plotW, plotH);
+    c.fillStyle = "#665c54";
+    c.font = layout.font;
+    c.fillText("Differential energy flux", 8, 12);
+    c.fillText("Energy (eV)", w / 2 - 30, h - 24);
+    const xTicks = [0.1, 1, 10, 100, 1000, 10000].filter((v) => v >= xLow && v <= xHigh);
+    xTicks.forEach((tick) => {
+      const x = xMap(tick);
+      if (x === null) return;
+      c.strokeStyle = "rgba(0,0,0,0.08)";
+      c.beginPath();
+      c.moveTo(x, pad.t);
+      c.lineTo(x, h - pad.b);
+      c.stroke();
+      c.fillStyle = "#665c54";
+      c.font = layout.smallFont;
+      c.fillText(String(tick), x - c.measureText(String(tick)).width / 2, h - 10);
+    });
+    const yTicks = [1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9].filter((v) => v >= yLow && v <= yHigh);
+    yTicks.forEach((tick) => {
+      const y = yMap(tick);
+      if (y === null) return;
+      c.strokeStyle = "rgba(0,0,0,0.08)";
+      c.beginPath();
+      c.moveTo(pad.l, y);
+      c.lineTo(w - pad.r, y);
+      c.stroke();
+      c.fillStyle = "#665c54";
+      c.font = layout.smallFont;
+      c.fillText(`1e${Math.round(Math.log10(tick))}`, 4, y + 4);
+    });
+    let legendX = pad.l + 8;
+    (options.bands || []).forEach((band) => {
+      c.fillStyle = "rgba(255,250,241,0.92)";
+      c.fillRect(legendX - 4, pad.t + 6, 56, 18);
+      c.fillStyle = band.color.replace(/0\.\d+\)/, "0.65)");
+      c.fillRect(legendX, pad.t + 11, 12, 6);
+      c.fillStyle = "#433931";
+      c.font = layout.smallFont;
+      c.fillText(band.label, legendX + 16, pad.t + 17);
+      legendX += 60;
+    });
+    const traces = [
+      { label: "Pitch < 30 deg", color: "#cc4338", values: forwardFlux || [], marker: "circle" },
+      { label: "Pitch > 150 deg", color: "#2674c8", values: backwardFlux || [], marker: "square" },
+    ];
+    traces.forEach((trace) => {
+      c.strokeStyle = trace.color;
+      c.lineWidth = 1.7;
+      c.beginPath();
+      let started = false;
+      for (let i = 0; i < energy.length; i += 1) {
+        const px = xMap(energy[i]);
+        const py = yMap(trace.values[i]);
+        if (px === null || py === null) continue;
+        if (!started) { c.moveTo(px, py); started = true; } else { c.lineTo(px, py); }
+      }
+      c.stroke();
+      for (let i = 0; i < energy.length; i += 1) {
+        const px = xMap(energy[i]);
+        const py = yMap(trace.values[i]);
+        if (px === null || py === null) continue;
+        c.fillStyle = trace.color;
+        if (trace.marker === "circle") {
+          c.beginPath();
+          c.arc(px, py, 2.5, 0, Math.PI * 2);
+          c.fill();
+        } else {
+          c.fillRect(px - 2, py - 2, 4, 4);
+        }
+      }
+    });
+    drawTraceLegend(c, w, traces.map((trace) => ({ label: trace.label, color: trace.color })), layout);
+  }
+  function panelWindow(dataPart) {
+    const centerUnix = isoToUnix(state.samples[state.selectedIndex]?.target_time || "");
+    const seconds = state.data?.context_overview?.window_seconds || 600;
+    const times = dataPart?.times_unix || [];
+    const picked = withWindow(times, centerUnix, seconds);
+    return { centerUnix, seconds, times, indices: picked.indices };
+  }
+  function sampleWindow() {
+    const centerUnix = isoToUnix(state.samples[state.selectedIndex]?.target_time || "");
+    const seconds = state.data?.context_overview?.window_seconds || 600;
+    const times = state.samples.map((sample) => isoToUnix(sample.target_time));
+    const picked = withWindow(times, centerUnix, seconds);
+    return { centerUnix, seconds, times, indices: picked.indices };
+  }
+  function renderPanels() {
+    if (!state.data || !state.samples.length) {
+      drawHeatmap("staticEnergyCanvas", "staticEnergyLegend", [], [], [], "Energy (eV)", FIXED_RANGES.staticEnergy);
+      drawHeatmap("staticMassCanvas", "staticMassLegend", [], [], [], "Mass (amu)", FIXED_RANGES.staticMass);
+      drawLinePlot("magTotalCanvas", [], "nT", FIXED_RANGES.bmag);
+      drawLinePlot("magVectorCanvas", [], "nT", FIXED_RANGES.bvec);
+      drawLinePlot("modelCanvas", [], "nT", FIXED_RANGES.model);
+      drawLinePlot("altitudeCanvas", [], "km", FIXED_RANGES.altitude);
+      drawHeatmap("swePadCanvas", "swePadLegend", [], [], [], "PAD (deg)", FIXED_RANGES.swePad);
+      drawHeatmap("sweEnergyCanvas", "sweEnergyLegend", [], [], [], "Energy (eV)", FIXED_RANGES.sweEnergy);
+      drawSpectrumPlot("directionalSpectrumCanvas", [], [], [], FIXED_RANGES.spectrum);
+      return;
+    }
+    const overview = state.data.context_overview || {};
+    const staticPart = overview.static;
+    const swePart = overview.swe;
+    const magPart = overview.mag;
+    const modelPart = overview.model_b_mso;
+
+    if (staticPart) {
+      const p = panelWindow(staticPart);
+      drawHeatmap("staticEnergyCanvas", "staticEnergyLegend", p.indices.map((i) => staticPart.energy_eflux[i] || []), p.indices.map((i) => p.times[i]), staticPart.energy_eV || [], "Energy (eV)", FIXED_RANGES.staticEnergy);
+      drawHeatmap("staticMassCanvas", "staticMassLegend", p.indices.map((i) => staticPart.mass_eflux[i] || []), p.indices.map((i) => p.times[i]), staticPart.mass_amu || [], "Mass (amu)", FIXED_RANGES.staticMass);
+    } else {
+      drawHeatmap("staticEnergyCanvas", "staticEnergyLegend", [], [], [], "Energy (eV)", FIXED_RANGES.staticEnergy);
+      drawHeatmap("staticMassCanvas", "staticMassLegend", [], [], [], "Mass (amu)", FIXED_RANGES.staticMass);
+    }
+
+    if (magPart) {
+      const p = panelWindow(magPart);
+      const times = p.indices.map((i) => p.times[i]);
+      drawLinePlot("magTotalCanvas", [{ label: "|B|", color: lineColors.bmag, times, values: p.indices.map((i) => magPart.bmag_nT[i]) }], "nT", FIXED_RANGES.bmag);
+      drawLinePlot("magVectorCanvas", [
+        { label: "Bx", color: lineColors.bx, times, values: p.indices.map((i) => magPart.bx_nT[i]) },
+        { label: "By", color: lineColors.by, times, values: p.indices.map((i) => magPart.by_nT[i]) },
+        { label: "Bz", color: lineColors.bz, times, values: p.indices.map((i) => magPart.bz_nT[i]) },
+      ], "nT", FIXED_RANGES.bvec);
+    } else {
+      drawLinePlot("magTotalCanvas", [], "nT", FIXED_RANGES.bmag);
+      drawLinePlot("magVectorCanvas", [], "nT", FIXED_RANGES.bvec);
+    }
+
+    if (modelPart?.available) {
+      const times = modelPart.times_unix || [];
+      const picked = withWindow(times, isoToUnix(state.samples[state.selectedIndex].target_time), overview.window_seconds || 600);
+      drawLinePlot("modelCanvas", [
+        { label: "Bx", color: lineColors.bx, times: picked.indices.map((i) => times[i]), values: picked.indices.map((i) => modelPart.bx_nT[i]) },
+        { label: "By", color: lineColors.by, times: picked.indices.map((i) => times[i]), values: picked.indices.map((i) => modelPart.by_nT[i]) },
+        { label: "Bz", color: lineColors.bz, times: picked.indices.map((i) => times[i]), values: picked.indices.map((i) => modelPart.bz_nT[i]) },
+      ], "nT", FIXED_RANGES.model);
+    } else {
+      drawLinePlot("modelCanvas", [], "nT", FIXED_RANGES.model);
+      const canvas = resolveCanvas("modelCanvas");
+      const c = canvas.getContext("2d");
+      c.fillStyle = "#665c54";
+      c.font = "12px Segoe UI";
+      c.fillText(modelPart?.message || "Model data unavailable.", 18, 32);
+    }
+
+    const altitudePart = sampleWindow();
+    drawLinePlot("altitudeCanvas", [
+      {
+        label: "Altitude",
+        color: "#9a5f2f",
+        times: altitudePart.indices.map((i) => altitudePart.times[i]),
+        values: altitudePart.indices.map((i) => sampleAltitudeKm(state.samples[i])),
+      },
+    ], "km", FIXED_RANGES.altitude);
+
+    if (swePart) {
+      const p = panelWindow(swePart);
+      drawHeatmap("swePadCanvas", "swePadLegend", normalizePadMatrix(p.indices.map((i) => swePart.pad_111_140_eflux[i] || [])), p.indices.map((i) => p.times[i]), swePart.pitch_deg || [], "PAD (deg)", FIXED_RANGES.swePad);
+      drawHeatmap("sweEnergyCanvas", "sweEnergyLegend", p.indices.map((i) => swePart.omni_eflux[i] || []), p.indices.map((i) => p.times[i]), swePart.energy_eV || [], "Energy (eV)", FIXED_RANGES.sweEnergy);
+    } else {
+      drawHeatmap("swePadCanvas", "swePadLegend", [], [], [], "PAD (deg)", FIXED_RANGES.swePad);
+      drawHeatmap("sweEnergyCanvas", "sweEnergyLegend", [], [], [], "Energy (eV)", FIXED_RANGES.sweEnergy);
+    }
+
+    const sample = state.samples[state.selectedIndex];
+    drawSpectrumPlot("directionalSpectrumCanvas", sample?.energy_eV || [], sample?.forward_flux || [], sample?.backward_flux || [], FIXED_RANGES.spectrum);
+  }
+  function updateSelection() {
+    if (!state.samples.length) return;
+    const sample = state.samples[state.selectedIndex];
+    const altitudeKm = sampleAltitudeKm(sample);
+    const altitudeText = finite(altitudeKm) ? ` | Alt: ${altitudeKm.toFixed(1)} km` : "";
+    ui.timeLabel.textContent = `${sample.target_time}${altitudeText}`;
+    ui.timeInput.value = sample.target_time;
+    ui.slider.value = String(state.selectedIndex);
+    try {
+      sessionStorage.setItem("maven_topology_selected_index", String(state.selectedIndex));
+    } catch (error) {
+      // Ignore storage failure.
+    }
+  }
+  function setSelectedIndex(index) {
+    state.selectedIndex = clamp(index, 0, Math.max(0, state.samples.length - 1));
+    updateSelection();
+    renderPanels();
+  }
+  function loadParsed(parsed, rawText = null) {
+    state.data = parsed;
+    state.samples = parsed.samples || [];
+    if (!state.samples.length) throw new Error("No samples were found in this JSON file.");
+    ui.slider.max = String(Math.max(0, state.samples.length - 1));
+    const cachedIndex = Number(sessionStorage.getItem("maven_topology_selected_index") || 0);
+    setSelectedIndex(cachedIndex);
+    if (rawText !== null) {
+      try { sessionStorage.setItem("maven_topology_json", rawText); } catch (error) {}
+    }
+  }
+  function loadFromCache() {
+    const raw = sessionStorage.getItem("maven_topology_json");
+    if (!raw) {
+      setStatus("No cached viewer state was found. Choose a topology_summary.json file first.");
+      renderPanels();
+      return;
+    }
+    try {
+      loadParsed(JSON.parse(raw));
+      setStatus(`Loaded cached state with ${state.samples.length} samples.`);
+    } catch (error) {
+      setStatus(`Failed to parse cached viewer state: ${error.message}`);
+    }
+  }
+  function jumpToTime() {
+    if (!state.samples.length) return;
+    const targetUnix = isoToUnix(ui.timeInput.value.trim());
+    if (!finite(targetUnix)) {
+      setStatus("Time parse failed. Use ISO format like 2015-01-05T07:45:00+00:00.");
+      return;
+    }
+    const times = state.samples.map((s) => isoToUnix(s.target_time));
+    setSelectedIndex(nearestIndex(times, targetUnix));
+    setStatus(`Moved to nearest sample for ${ui.timeInput.value.trim()}.`);
+  }
+
+  ui.load.addEventListener("click", async () => {
+    if (!ui.file.files.length) {
+      setStatus("Choose a topology_summary.json file first.");
+      return;
+    }
+    try {
+      const text = await ui.file.files[0].text();
+      loadParsed(JSON.parse(text), text);
+      setStatus(`Loaded ${state.samples.length} samples from file.`);
+    } catch (error) {
+      setStatus(`Load failed: ${error.message}`);
+    }
+  });
+  ui.reload.addEventListener("click", loadFromCache);
+  ui.slider.addEventListener("input", () => setSelectedIndex(Number(ui.slider.value)));
+  ui.jumpTime.addEventListener("click", jumpToTime);
+  ui.timeInput.addEventListener("keydown", (event) => { if (event.key === "Enter") jumpToTime(); });
+  window.addEventListener("resize", renderPanels);
+
+  loadFromCache();
+})();
+</script>
+</body>
+</html>
