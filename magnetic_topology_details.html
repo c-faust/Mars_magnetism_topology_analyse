@@ -114,6 +114,25 @@
   function setStatus(text) { ui.status.textContent = text; }
   function finite(v) { return Number.isFinite(v); }
   function valueOrDash(v, digits = 3) { return finite(v) ? Number(v).toFixed(digits) : "n/a"; }
+  function sampleAltitudeKm(sample) {
+    if (!sample) return NaN;
+    if (finite(sample.altitude_km)) return Number(sample.altitude_km);
+    const posKm = Array.isArray(sample.position_km) ? sample.position_km : null;
+    if (posKm && posKm.length === 3 && posKm.every(finite)) {
+      return Math.hypot(posKm[0], posKm[1], posKm[2]) - 3389.5;
+    }
+    const posRm = Array.isArray(sample.position_rm) ? sample.position_rm : null;
+    if (posRm && posRm.length === 3 && posRm.every(finite)) {
+      return (Math.hypot(posRm[0], posRm[1], posRm[2]) - 1.0) * 3389.5;
+    }
+    return NaN;
+  }
+  function sampleAltitudeRm(sample) {
+    if (!sample) return NaN;
+    if (finite(sample.altitude_rm)) return Number(sample.altitude_rm);
+    const altitudeKm = sampleAltitudeKm(sample);
+    return finite(altitudeKm) ? altitudeKm / 3389.5 : NaN;
+  }
 
   function render() {
     // Convert the currently loaded JSON into two human-readable blocks:
@@ -147,6 +166,8 @@
     }
     const pos = (sample.positions_by_frame_rm?.[state.frame] || sample.position_rm || []).map((v) => valueOrDash(v, 3)).join(", ");
     const b = (sample.magnetic_field_nT || []).map((v) => valueOrDash(v, 2)).join(", ");
+    const altitudeKm = sampleAltitudeKm(sample);
+    const altitudeRm = sampleAltitudeRm(sample);
     ui.selection.textContent = [
       `Index: ${index}`,
       `Target time: ${sample.target_time}`,
@@ -154,6 +175,7 @@
       `MAG SS time: ${sample.mag_time_ss}`,
       `MAG PC time: ${sample.mag_time_pc}`,
       `Topology: ${sample.topology}`,
+      `Altitude: ${valueOrDash(altitudeKm, 1)} km (${valueOrDash(altitudeRm, 4)} R_M above surface)`,
       `Position (${state.frame}, R_M): ${pos}`,
       `B_MSO [nT]: ${b}`,
       `Forward score: ${sample.forward_features?.feature_score ?? "n/a"}`,

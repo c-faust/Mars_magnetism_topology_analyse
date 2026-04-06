@@ -60,8 +60,8 @@ CONFIG = {
 # Topology criteria are centralized here so the rules are explicit and easy to adjust.
 TOPOLOGY_RULES = {
     "pitch_angle": {
-        "parallel_max_deg": 30.0,
-        "anti_parallel_min_deg": 150.0,
+        "parallel_max_deg": 60.0,
+        "anti_parallel_min_deg": 120.0,
     },
     "knee": {
         "pre_band_eV": (30.0, 55.0),
@@ -119,6 +119,8 @@ class TopologySample:
     energy_eV: list[float]
     forward_flux: list[float]
     backward_flux: list[float]
+    altitude_km: float
+    altitude_rm: float
     position_km: list[float]
     position_rm: list[float]
     positions_by_frame_km: dict[str, list[float]]
@@ -568,6 +570,8 @@ def sample_from_time(
     position_km_pc, mag_time_pc = extract_position_from_mag(target_time, mag_data_pc)
     position_rm_ss = position_km_ss / MARS_RADIUS_KM
     position_rm_pc = position_km_pc / MARS_RADIUS_KM
+    altitude_km = float(np.linalg.norm(position_km_ss) - MARS_RADIUS_KM)
+    altitude_rm = altitude_km / MARS_RADIUS_KM
 
     return TopologySample(
         target_time=target_time.isoformat(timespec="seconds"),
@@ -581,6 +585,8 @@ def sample_from_time(
         energy_eV=energy.tolist(),
         forward_flux=forward_flux.tolist(),
         backward_flux=backward_flux.tolist(),
+        altitude_km=altitude_km,
+        altitude_rm=altitude_rm,
         position_km=position_km_ss.tolist(),
         position_rm=position_rm_ss.tolist(),
         positions_by_frame_km={

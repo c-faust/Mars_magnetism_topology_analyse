@@ -55,6 +55,8 @@
 - `positions_by_frame_km["pc"]`
 - `positions_by_frame_rm["ss"]`
 - `positions_by_frame_rm["pc"]`
+- `altitude_km`
+- `altitude_rm`
 
 为了兼容旧逻辑，脚本仍保留：
 
@@ -470,6 +472,32 @@ python run_maven_pipeline.py
 ### 2026-04-05 Persisted layout recovery
 - Hardened the pane-width restore logic in `magnetic_topology_viewer.html` so invalid widths saved in browser local storage no longer collapse the page into a single visible column.
 - Pane widths are now persisted as validated pixel values, automatically clamped on load and on browser resize, and cleared when the stored layout is not usable.
+
+### 2026-04-05 Denser right-side data column
+- Tightened the right-side data column in `magnetic_topology_viewer.html` so the stacked plots use more of the available vertical space and waste less padding between panels.
+- Changed the panel stack to proportional full-height rows and slightly enlarged the plot-axis and legend text for better readability.
+
+### 2026-04-05 Standalone data-panel page
+- Added `magnetic_topology_data_panels.html` as a separate page dedicated to the data plots previously shown in the viewer's right column.
+- The new page can load `topology_summary.json` directly or reuse cached state from the main viewer, and it keeps the same slider-based and typed-time navigation workflow.
+- Added an `Open Data Page` link to `magnetic_topology_viewer.html` so the standalone data page can be opened from the main orbit viewer.
+
+### 2026-04-05 Orbit altitude in analysis results
+- Added per-sample orbit altitude fields to `topology_summary.json`: `altitude_km` and `altitude_rm`.
+- Updated the viewer pages so the selected-time readout and details page now show the current sample altitude directly.
+
+### 2026-04-05 Altitude plot in data panels
+- Added an `Altitude` line plot to the third-column data panel stack in `magnetic_topology_viewer.html`.
+- Added the same altitude panel to `magnetic_topology_data_panels.html`, linked to the same time slider and typed-time navigation as the other plots.
+
+### 2026-04-06 Normalized SWE PAD rendering
+- Updated the `SWE PAD (111-140 eV)` panel in both `magnetic_topology_viewer.html` and `magnetic_topology_data_panels.html`.
+- The panel now shows a normalized pitch-angle distribution instead of absolute electron flux.
+- For each time slice, the 111–140 eV PAD is divided by its mean over pitch-angle bins before plotting, and the color scale is now linear with a fixed normalized range of `0.6` to `1.4`.
+
+### 2026-04-06 SWE PAD rainbow colorbar
+- Updated the normalized `SWE PAD` panel so its colorbar now uses a rainbow-style mapping closer to the paper-style reference bar: blue/purple at the low end, then cyan/green, then yellow/red at the high end.
+- This custom color mapping is only applied to the normalized `SWE PAD` panel and does not change the color mapping used by the other energy and mass plots.
 ## Data Shape Flow
 
 This section explains how array shapes change from raw MAVEN files to the final visualization JSON and then to the HTML plots.

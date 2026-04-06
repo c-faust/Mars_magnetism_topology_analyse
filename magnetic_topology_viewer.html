@@ -69,10 +69,11 @@
     min-width: 0;
   }
   .data-column {
-    padding: 8px;
+    padding: 4px;
     height: 100vh;
     overflow: hidden;
     min-width: 0;
+    display: flex;
   }
   .card {
     background: var(--panel);
@@ -175,17 +176,22 @@
   .grid-panels {
     display: grid;
     grid-template-columns: 1fr;
-    gap: 4px;
+    grid-template-rows: 1.02fr 1.02fr 0.78fr 0.78fr 0.78fr 0.78fr 1.0fr 1.0fr 1.12fr;
+    gap: 2px;
+    height: calc(100vh - 8px);
+    width: 100%;
+    min-height: 0;
   }
   .panel {
     padding: 0;
     display: grid;
-    grid-template-columns: 68px 1fr;
+    grid-template-columns: 60px minmax(0, 1fr);
     gap: 0;
     cursor: zoom-in;
-    border-radius: 8px;
+    border-radius: 7px;
     overflow: hidden;
     box-shadow: none;
+    min-height: 0;
   }
   .panel-head {
     grid-column: 1;
@@ -193,18 +199,19 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 2px;
-    padding: 6px 6px 6px 8px;
+    gap: 1px;
+    padding: 4px 4px 4px 6px;
     border-right: 1px solid #e3d9cb;
     background: #f8f1e8;
+    min-height: 0;
   }
   .panel-head h3 {
-    font-size: 11px;
+    font-size: 11.5px;
     line-height: 1.05;
     font-weight: 700;
   }
   .panel-head span {
-    font-size: 9px;
+    font-size: 9.5px;
     color: var(--muted);
     line-height: 1.05;
   }
@@ -212,22 +219,24 @@
     grid-column: 2;
     grid-row: 1;
     display: grid;
-    grid-template-columns: 1fr 28px;
-    gap: 4px;
+    grid-template-columns: minmax(0, 1fr) 26px;
+    gap: 2px;
     align-items: stretch;
-    padding: 2px 2px 2px 4px;
+    padding: 1px 1px 1px 2px;
     background: #fff;
+    min-height: 0;
   }
   canvas.plot {
     width: 100%;
-    height: 84px;
+    height: 100%;
     border-radius: 4px;
     background: #fff;
     border: 1px solid #ddd0c0;
+    min-height: 0;
   }
   canvas.legend {
-    width: 28px;
-    height: 84px;
+    width: 26px;
+    height: 100%;
     border-radius: 4px;
     background: #fff;
     border: 1px solid #ddd0c0;
@@ -235,27 +244,7 @@
   .panel > canvas.plot {
     grid-column: 2;
     grid-row: 1;
-    margin: 2px 2px 2px 4px;
-  }
-  [data-panel-key="bmag"] canvas.plot,
-  [data-panel-key="bvec"] canvas.plot,
-  [data-panel-key="model"] canvas.plot {
-    height: 62px;
-  }
-  [data-panel-key="staticEnergy"] canvas.plot,
-  [data-panel-key="staticMass"] canvas.plot,
-  [data-panel-key="swePad"] canvas.plot,
-  [data-panel-key="sweEnergy"] canvas.plot {
-    height: 76px;
-  }
-  [data-panel-key="staticEnergy"] canvas.legend,
-  [data-panel-key="staticMass"] canvas.legend,
-  [data-panel-key="swePad"] canvas.legend,
-  [data-panel-key="sweEnergy"] canvas.legend {
-    height: 76px;
-  }
-  [data-panel-key="spectrum"] canvas.plot {
-    height: 90px;
+    margin: 1px 1px 1px 2px;
   }
   .timeline {
     padding: 10px;
@@ -387,6 +376,7 @@
       <p class="small">Drag to rotate, mouse wheel to zoom, click the orbit or use the time controls below.</p>
     </div>
     <a id="detailsLink" class="details-link" href="magnetic_topology_details.html" target="_blank" rel="noopener" aria-disabled="true">Open Details Page</a>
+    <a id="dataPanelsLink" class="details-link" href="magnetic_topology_data_panels.html" target="_blank" rel="noopener" aria-disabled="true">Open Data Page</a>
     <div class="card timeline">
       <div>
         <h2>Time Navigation</h2>
@@ -451,6 +441,10 @@
           <div class="panel-head"><h3>Model<br>B_MSO</h3><span>Bx By Bz</span></div>
           <canvas class="plot" id="modelCanvas"></canvas>
         </section>
+        <section class="card panel" data-panel-key="altitude" data-panel-title="Altitude" data-source-canvas="altitudeCanvas">
+          <div class="panel-head"><h3>Altitude</h3><span>km</span></div>
+          <canvas class="plot" id="altitudeCanvas"></canvas>
+        </section>
         <section class="card panel" data-panel-key="swePad" data-panel-title="SWE PAD (111-140 eV)" data-source-canvas="swePadCanvas" data-source-legend="swePadLegend">
           <div class="panel-head"><h3>SWE PAD</h3><span>111-140 eV</span></div>
           <div class="plot-row"><canvas class="plot" id="swePadCanvas"></canvas><canvas class="legend" id="swePadLegend"></canvas></div>
@@ -494,6 +488,7 @@
     frame: document.getElementById("frameSelect"),
     reset: document.getElementById("resetViewButton"),
     details: document.getElementById("detailsLink"),
+    dataPanels: document.getElementById("dataPanelsLink"),
     status: document.getElementById("status"),
     viewerMeta: document.getElementById("viewerMeta"),
     viewer: document.getElementById("viewerCanvas"),
@@ -514,6 +509,7 @@
 
   const topologyColor = { closed: "#cc4338", open: "#2674c8", ambiguous: "#8a847d" };
   const lineColors = { bx: "#cc4338", by: "#2674c8", bz: "#3a8a53", bmag: "#6e5b4f" };
+  const MARS_RADIUS_KM = 3389.5;
   const DEFAULT_PANE_WIDTHS = {
     left: "clamp(240px, 22vw, 360px)",
     right: "clamp(260px, 26vw, 420px)",
@@ -522,7 +518,22 @@
   const FIXED_RANGES = {
     staticEnergy: { yMode: "log", yRange: [0.1, 10000.0], colorLogRange: [3.0, 9.0] },
     staticMass: { yMode: "linear", yRange: null, colorLogRange: [3.0, 9.0] },
-    swePad: { yMode: "linear", yRange: [0.0, 180.0], colorLogRange: [3.0, 9.0] },
+    swePad: {
+      yMode: "linear",
+      yRange: [0.0, 180.0],
+      colorScale: "linear",
+      colorRange: [0.5, 1.5],
+      legendLabel: "norm. eflux",
+      paletteStops: [
+        [70, 0, 130],
+        [40, 70, 255],
+        [0, 180, 255],
+        [0, 220, 120],
+        [190, 235, 0],
+        [255, 180, 0],
+        [255, 30, 0],
+      ],
+    },
     sweEnergy: { yMode: "log", yRange: [0.1, 10000.0], colorLogRange: [3.0, 9.0] },
     spectrum: {
       xRange: [0.1, 10000.0],
@@ -536,6 +547,7 @@
     bmag: { yRange: [0.0, 50.0] },
     bvec: { yRange: [-50.0, 50.0] },
     model: { yRange: [-30.0, 30.0] },
+    altitude: { yRange: null },
   };
 
   function setStatus(text) { ui.status.textContent = text; }
@@ -689,12 +701,26 @@
       sessionStorage.setItem("maven_topology_frame", state.frame);
       sessionStorage.setItem("maven_topology_selected_index", String(state.selectedIndex));
       ui.details.setAttribute("aria-disabled", "false");
+      ui.dataPanels.setAttribute("aria-disabled", "false");
     } catch (error) {
       setStatus(`Loaded, but failed to cache state for details page: ${error.message}`);
     }
   }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
   function finite(v) { return Number.isFinite(v); }
+  function sampleAltitudeKm(sample) {
+    if (!sample) return NaN;
+    if (finite(sample.altitude_km)) return Number(sample.altitude_km);
+    const posKm = Array.isArray(sample.position_km) ? sample.position_km : null;
+    if (posKm && posKm.length === 3 && posKm.every(finite)) {
+      return Math.hypot(posKm[0], posKm[1], posKm[2]) - MARS_RADIUS_KM;
+    }
+    const posRm = Array.isArray(sample.position_rm) ? sample.position_rm : null;
+    if (posRm && posRm.length === 3 && posRm.every(finite)) {
+      return (Math.hypot(posRm[0], posRm[1], posRm[2]) - 1.0) * MARS_RADIUS_KM;
+    }
+    return NaN;
+  }
   function isoToUnix(text) { const t = Date.parse(text); return Number.isFinite(t) ? t / 1000 : NaN; }
   function unixToIso(sec) { return new Date(sec * 1000).toISOString(); }
   function valueOrDash(v, digits = 3) { return finite(v) ? Number(v).toFixed(digits) : "n/a"; }
@@ -711,17 +737,8 @@
     }
   }
 
-  function palette(t) {
+  function colorFromStops(t, stops) {
     const c = clamp(t, 0, 1);
-    const stops = [
-      [10, 26, 68],
-      [31, 92, 143],
-      [54, 144, 192],
-      [120, 179, 131],
-      [232, 191, 92],
-      [202, 96, 62],
-      [120, 22, 31],
-    ];
     const p = c * (stops.length - 1);
     const i = Math.floor(p);
     const f = p - i;
@@ -729,6 +746,17 @@
     const b = stops[Math.min(i + 1, stops.length - 1)];
     const rgb = a.map((v, idx) => Math.round(v + (b[idx] - v) * f));
     return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+  }
+  function palette(t) {
+    return colorFromStops(t, [
+      [10, 26, 68],
+      [31, 92, 143],
+      [54, 144, 192],
+      [120, 179, 131],
+      [232, 191, 92],
+      [202, 96, 62],
+      [120, 22, 31],
+    ]);
   }
 
   function withWindow(times, centerUnix, seconds) {
@@ -850,16 +878,16 @@
     if (expanded) {
       return {
         pad: { l: 84, r: 24, t: 24, b: 42 },
-        font: "15px Segoe UI",
-        smallFont: "13px Segoe UI",
-        legendFont: "13px Segoe UI",
+        font: "16px Segoe UI",
+        smallFont: "14px Segoe UI",
+        legendFont: "14px Segoe UI",
       };
     }
     return {
-      pad: { l: 58, r: 18, t: 16, b: 28 },
-      font: "12px Segoe UI",
-      smallFont: "11px Segoe UI",
-      legendFont: "12px Segoe UI",
+      pad: { l: 64, r: 18, t: 16, b: 30 },
+      font: "13px Segoe UI",
+      smallFont: "12px Segoe UI",
+      legendFont: "13px Segoe UI",
     };
   }
 
@@ -918,6 +946,16 @@
       c.fillStyle = "#333";
       c.font = layout.smallFont;
       c.fillText(trace.label, x + 22, 21);
+    });
+  }
+  function normalizePadMatrix(matrix) {
+    return (matrix || []).map((row) => {
+      const values = Array.isArray(row) ? row : [];
+      const valid = values.filter((v) => finite(v) && v > 0);
+      if (!valid.length) return values.map(() => NaN);
+      const mean = valid.reduce((sum, value) => sum + value, 0) / valid.length;
+      if (!(finite(mean) && mean > 0)) return values.map(() => NaN);
+      return values.map((value) => (finite(value) && value > 0 ? value / mean : NaN));
     });
   }
 
@@ -1120,12 +1158,22 @@
     c.fillRect(0, 0, w, h);
     const layout = plotLayout(w, h, canvas === ui.focusPlot);
     const pad = layout.pad;
-    if (!matrix.length || !yValues.length || !xTimes.length) { drawNoData(c, w, h, "No data in window"); drawLegend(legendTarget, NaN, NaN); return; }
+    const colorScale = options.colorScale || "log";
+    if (!matrix.length || !yValues.length || !xTimes.length) { drawNoData(c, w, h, "No data in window"); drawLegend(legendTarget, NaN, NaN, options); return; }
     const flat = [];
-    for (const row of matrix) for (const v of row) if (finite(v) && v > 0) flat.push(Math.log10(v));
-    if (!flat.length) { drawNoData(c, w, h, "No valid flux values"); drawLegend(legendTarget, NaN, NaN); return; }
-    const vmin = options.colorLogRange ? options.colorLogRange[0] : Math.min(...flat);
-    const vmax = options.colorLogRange ? options.colorLogRange[1] : Math.max(...flat);
+    for (const row of matrix) {
+      for (const v of row) {
+        if (!finite(v)) continue;
+        if (colorScale === "log") {
+          if (v > 0) flat.push(Math.log10(v));
+        } else {
+          flat.push(v);
+        }
+      }
+    }
+    if (!flat.length) { drawNoData(c, w, h, "No valid flux values"); drawLegend(legendTarget, NaN, NaN, options); return; }
+    const vmin = options.colorRange ? options.colorRange[0] : (options.colorLogRange ? options.colorLogRange[0] : Math.min(...flat));
+    const vmax = options.colorRange ? options.colorRange[1] : (options.colorLogRange ? options.colorLogRange[1] : Math.max(...flat));
     const plotW = w - pad.l - pad.r, plotH = h - pad.t - pad.b;
     const cellW = plotW / Math.max(1, xTimes.length);
     const yMode = options.yMode || "linear";
@@ -1152,9 +1200,18 @@
         const next = ySorted[Math.min(j + 1, ySorted.length - 1)];
         const row = matrix[ix] || [];
         const v = row[current.index];
-        if (!(finite(v) && v > 0)) continue;
-        const lv = Math.log10(v);
-        c.fillStyle = palette((lv - vmin) / Math.max(1e-9, vmax - vmin));
+        if (!finite(v)) continue;
+        if (colorScale === "log" && !(v > 0)) continue;
+        const colorValue = colorScale === "log" ? Math.log10(v) : v;
+        c.fillStyle = colorFromStops((colorValue - vmin) / Math.max(1e-9, vmax - vmin), options.paletteStops || [
+          [10, 26, 68],
+          [31, 92, 143],
+          [54, 144, 192],
+          [120, 179, 131],
+          [232, 191, 92],
+          [202, 96, 62],
+          [120, 22, 31],
+        ]);
         const x = pad.l + ix * cellW;
         const yTop = yMap(next.value);
         const yBottom = yMap(current.value);
@@ -1193,10 +1250,10 @@
       drawTimeMarker(c, w, h, pad, centerUnix, xmin, xmax);
       drawTimeAxisLabels(c, w, h, pad, xmin, xmax, layout);
     }
-    drawLegend(legendTarget, vmin, vmax);
+    drawLegend(legendTarget, vmin, vmax, options);
   }
 
-  function drawLegend(legendTarget, minVal, maxVal) {
+  function drawLegend(legendTarget, minVal, maxVal, options = {}) {
     const canvas = resolveCanvas(legendTarget);
     if (!canvas) return;
     resizeCanvas(canvas);
@@ -1209,26 +1266,34 @@
     c.strokeRect(0.5, 0.5, w - 1, h - 1);
     if (!(finite(minVal) && finite(maxVal))) {
       c.fillStyle = "#665c54";
-      c.font = "12px Segoe UI";
+      c.font = "13px Segoe UI";
       c.fillText("n/a", 14, h / 2);
       return;
     }
     const barX = 10, barY = 12, barW = 18, barH = h - 24;
     for (let i = 0; i < barH; i += 1) {
       const t = 1 - i / Math.max(1, barH - 1);
-      c.fillStyle = palette(t);
+      c.fillStyle = colorFromStops(t, options.paletteStops || [
+        [10, 26, 68],
+        [31, 92, 143],
+        [54, 144, 192],
+        [120, 179, 131],
+        [232, 191, 92],
+        [202, 96, 62],
+        [120, 22, 31],
+      ]);
       c.fillRect(barX, barY + i, barW, 1);
     }
     c.strokeStyle = "#998877";
     c.strokeRect(barX, barY, barW, barH);
     c.fillStyle = "#433931";
-    c.font = "11px Segoe UI";
+    c.font = "12px Segoe UI";
     c.fillText(maxVal.toFixed(2), 32, barY + 4);
     c.fillText(minVal.toFixed(2), 32, barY + barH);
     c.save();
     c.translate(w - 7, h / 2);
     c.rotate(-Math.PI / 2);
-    c.fillText("log10(flux)", -28, 0);
+    c.fillText(options.legendLabel || "log10(flux)", -28, 0);
     c.restore();
   }
 
@@ -1236,7 +1301,7 @@
     c.fillStyle = "#fff";
     c.fillRect(0, 0, w, h);
     c.fillStyle = "#786f67";
-    c.font = "14px Segoe UI";
+    c.font = "15px Segoe UI";
     c.fillText(message, 18, h / 2);
   }
 
@@ -1324,11 +1389,24 @@
       }
       return;
     }
+    if (panelKey === "altitude") {
+      hideLegend();
+      const p = sampleWindow();
+      drawLinePlot(ui.focusPlot, [
+        {
+          label: "Altitude",
+          color: "#9a5f2f",
+          times: p.indices.map((i) => p.times[i]),
+          values: p.indices.map((i) => sampleAltitudeKm(state.samples[i])),
+        },
+      ], "km", FIXED_RANGES.altitude);
+      return;
+    }
     if (panelKey === "swePad") {
       showLegend();
       if (swePart) {
         const p = panelWindow(swePart);
-        drawHeatmap(ui.focusPlot, ui.focusLegend, p.indices.map((i) => swePart.pad_111_140_eflux[i] || []), p.indices.map((i) => p.times[i]), swePart.pitch_deg || [], "PAD (deg)", FIXED_RANGES.swePad);
+        drawHeatmap(ui.focusPlot, ui.focusLegend, normalizePadMatrix(p.indices.map((i) => swePart.pad_111_140_eflux[i] || [])), p.indices.map((i) => p.times[i]), swePart.pitch_deg || [], "PAD (deg)", FIXED_RANGES.swePad);
       } else {
         drawHeatmap(ui.focusPlot, ui.focusLegend, [], [], [], "PAD (deg)", FIXED_RANGES.swePad);
       }
@@ -1383,6 +1461,13 @@
     const picked = withWindow(times, centerUnix, seconds);
     return { centerUnix, seconds, times, indices: picked.indices };
   }
+  function sampleWindow() {
+    const centerUnix = isoToUnix(state.samples[state.selectedIndex].target_time);
+    const seconds = state.data.context_overview?.window_seconds || 600;
+    const times = state.samples.map((sample) => isoToUnix(sample.target_time));
+    const picked = withWindow(times, centerUnix, seconds);
+    return { centerUnix, seconds, times, indices: picked.indices };
+  }
 
   function renderPanels() {
     // Draw all small right-side overview panels.
@@ -1392,6 +1477,7 @@
       drawLinePlot("magTotalCanvas", [], "nT", FIXED_RANGES.bmag);
       drawLinePlot("magVectorCanvas", [], "nT", FIXED_RANGES.bvec);
       drawLinePlot("modelCanvas", [], "nT", FIXED_RANGES.model);
+      drawLinePlot("altitudeCanvas", [], "km", FIXED_RANGES.altitude);
       drawHeatmap("swePadCanvas", "swePadLegend", [], [], [], "PAD (deg)", FIXED_RANGES.swePad);
       drawHeatmap("sweEnergyCanvas", "sweEnergyLegend", [], [], [], "Energy (eV)", FIXED_RANGES.sweEnergy);
       return;
@@ -1441,9 +1527,19 @@
       c.fillText(modelPart?.message || "Model data unavailable.", 18, 32);
     }
 
+    const altitudePart = sampleWindow();
+    drawLinePlot("altitudeCanvas", [
+      {
+        label: "Altitude",
+        color: "#9a5f2f",
+        times: altitudePart.indices.map((i) => altitudePart.times[i]),
+        values: altitudePart.indices.map((i) => sampleAltitudeKm(state.samples[i])),
+      },
+    ], "km", FIXED_RANGES.altitude);
+
     if (swePart) {
       const p = panelWindow(swePart);
-      drawHeatmap("swePadCanvas", "swePadLegend", p.indices.map((i) => swePart.pad_111_140_eflux[i] || []), p.indices.map((i) => p.times[i]), swePart.pitch_deg || [], "PAD (deg)", FIXED_RANGES.swePad);
+      drawHeatmap("swePadCanvas", "swePadLegend", normalizePadMatrix(p.indices.map((i) => swePart.pad_111_140_eflux[i] || [])), p.indices.map((i) => p.times[i]), swePart.pitch_deg || [], "PAD (deg)", FIXED_RANGES.swePad);
       drawHeatmap("sweEnergyCanvas", "sweEnergyLegend", p.indices.map((i) => swePart.omni_eflux[i] || []), p.indices.map((i) => p.times[i]), swePart.energy_eV || [], "Energy (eV)", FIXED_RANGES.sweEnergy);
     } else {
       drawHeatmap("swePadCanvas", "swePadLegend", [], [], [], "PAD (deg)", FIXED_RANGES.swePad);
@@ -1464,10 +1560,12 @@
     // Keep time controls and stage labels synchronized with the selected index.
     if (!state.samples.length) return;
     const s = state.samples[state.selectedIndex];
-    ui.timeLabel.textContent = s.target_time;
+    const altitudeKm = sampleAltitudeKm(s);
+    const altitudeText = finite(altitudeKm) ? ` | Alt: ${altitudeKm.toFixed(1)} km` : "";
+    ui.timeLabel.textContent = `${s.target_time}${altitudeText}`;
     ui.timeInput.value = s.target_time;
     ui.slider.value = String(state.selectedIndex);
-    ui.viewerMeta.textContent = `Frame: ${ui.frame.selectedOptions[0].textContent} | Selected: ${s.target_time}`;
+    ui.viewerMeta.textContent = `Frame: ${ui.frame.selectedOptions[0].textContent} | Selected: ${s.target_time}${altitudeText}`;
     persistViewerState();
   }
 
@@ -1581,6 +1679,7 @@
 
   if (sessionStorage.getItem("maven_topology_json")) {
     ui.details.setAttribute("aria-disabled", "false");
+    ui.dataPanels.setAttribute("aria-disabled", "false");
   }
   restorePaneWidths();
   enforcePaneWidthBounds();
