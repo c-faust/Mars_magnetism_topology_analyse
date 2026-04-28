@@ -1,5 +1,23 @@
 # README
 
+## Machine-learning electron spectra workspace
+
+New standalone folder:
+
+- `machine_learning/download_electron_spectra.py`
+  - Downloads MAVEN SWE `svypad` electron spectra by calling `download_maven_data.py`.
+- `machine_learning/analyze_electron_spectra_ml.py`
+  - Loads SWE electron spectra, normalizes them, clusters characteristic spectral shapes, and reports the nearest real timestamp for each cluster.
+- `machine_learning/README.md`
+  - Contains command examples and output descriptions.
+
+Example:
+
+```bash
+python machine_learning/download_electron_spectra.py --year 2024
+python machine_learning/analyze_electron_spectra_ml.py --start 2024-11-07T00:00:00 --end 2024-11-08T00:00:00 --auto-clusters
+```
+
 ## 1. 维护指令
 
 每次更新代码的同时，必须同步更新此 `README.md` 文件。

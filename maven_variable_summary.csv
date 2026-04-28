@@ -1,0 +1,270 @@
+﻿Instrument,DataType,Variable,DType,Shape,Units,Format,Alias,FileKind,SourceFile
+euv,bands,counts,float32,"[86393, 3]",,,,cdf,mvn_euv_l2_bands_20241107_v18_r01.cdf
+euv,bands,data,float32,"[86393, 3]",,,,cdf,mvn_euv_l2_bands_20241107_v18_r01.cdf
+euv,bands,ddata,float32,"[86393, 3]",,,,cdf,mvn_euv_l2_bands_20241107_v18_r01.cdf
+euv,bands,dfreq,float32,"[86393, 3]",,,,cdf,mvn_euv_l2_bands_20241107_v18_r01.cdf
+euv,bands,epoch,int64,[86393],,,,cdf,mvn_euv_l2_bands_20241107_v18_r01.cdf
+euv,bands,flag,int16,[86393],,,,cdf,mvn_euv_l2_bands_20241107_v18_r01.cdf
+euv,bands,maven_sun_distance,float64,[86393],,,,cdf,mvn_euv_l2_bands_20241107_v18_r01.cdf
+euv,bands,time_unix,float64,[86393],,,,cdf,mvn_euv_l2_bands_20241107_v18_r01.cdf
+lpw,lpiv,data,float32,"[7982, 128]",,,,cdf,mvn_lpw_l2_lpiv_20241107_v03_r01.cdf
+lpw,lpiv,ddata,float32,"[7982, 128]",,,,cdf,mvn_lpw_l2_lpiv_20241107_v03_r01.cdf
+lpw,lpiv,dvolt,float32,"[7982, 128]",,,,cdf,mvn_lpw_l2_lpiv_20241107_v03_r01.cdf
+lpw,lpiv,epoch,int64,[7982],,,,cdf,mvn_lpw_l2_lpiv_20241107_v03_r01.cdf
+lpw,lpiv,flag,float32,[7982],,,,cdf,mvn_lpw_l2_lpiv_20241107_v03_r01.cdf
+lpw,lpiv,info,float32,[7982],,,,cdf,mvn_lpw_l2_lpiv_20241107_v03_r01.cdf
+lpw,lpiv,time_unix,float64,[7982],,,,cdf,mvn_lpw_l2_lpiv_20241107_v03_r01.cdf
+lpw,lpiv,volt,float32,"[7982, 128]",,,,cdf,mvn_lpw_l2_lpiv_20241107_v03_r01.cdf
+mag,sunstate-1sec,DDAY,float,[86399],,F13.9,DECIMAL_DAY,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,OB_B.RANGE,float,[86399],,"1X,F3.0",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,OB_B.X,float,[86399],NT,"1X,F9.2",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,OB_B.Y,float,[86399],NT,"1X,F9.2",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,OB_B.Z,float,[86399],NT,"1X,F9.2",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,OB_BDPL.RANGE,float,[86399],,"1X,F4.0",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,OB_BDPL.X,float,[86399],NT,"1X,F7.3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,OB_BDPL.Y,float,[86399],NT,"1X,F7.3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,OB_BDPL.Z,float,[86399],NT,"1X,F7.3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,POSN.X,float,[86399],KILOMETERS,"1X,F14.3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,POSN.Y,float,[86399],KILOMETERS,"1X,F14.3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,POSN.Z,float,[86399],KILOMETERS,"1X,F14.3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,TIME.DOY,int,[86399],,"1X,I3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,TIME.HOUR,int,[86399],,"1X,I2",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,TIME.MIN,int,[86399],,"1X,I2",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,TIME.MSEC,int,[86399],,"1X,I3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,TIME.SEC,int,[86399],,"1X,I2",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-1sec,TIME.YEAR,int,[86399],,"1X,I4",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,DDAY,float,[86399],,F13.9,DECIMAL_DAY,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,OB_B.RANGE,float,[86399],,"1X,F3.0",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,OB_B.X,float,[86399],NT,"1X,F9.2",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,OB_B.Y,float,[86399],NT,"1X,F9.2",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,OB_B.Z,float,[86399],NT,"1X,F9.2",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,OB_BDPL.RANGE,float,[86399],,"1X,F4.0",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,OB_BDPL.X,float,[86399],NT,"1X,F7.3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,OB_BDPL.Y,float,[86399],NT,"1X,F7.3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,OB_BDPL.Z,float,[86399],NT,"1X,F7.3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,POSN.X,float,[86399],KILOMETERS,"1X,F14.3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,POSN.Y,float,[86399],KILOMETERS,"1X,F14.3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,POSN.Z,float,[86399],KILOMETERS,"1X,F14.3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,TIME.DOY,int,[86399],,"1X,I3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,TIME.HOUR,int,[86399],,"1X,I2",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,TIME.MIN,int,[86399],,"1X,I2",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,TIME.MSEC,int,[86399],,"1X,I3",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,TIME.SEC,int,[86399],,"1X,I2",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+mag,sunstate-32sec,TIME.YEAR,int,[86399],,"1X,I4",,text_odl,mvn_mag_l2_2024312ss1s_20241107_v01_r01.sts
+sep,s1-cal-svy-full,a_fto_rates,float32,"[43203, 10]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,a_t_rates,float32,"[43203, 8]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,accum_time,uint16,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,attenuator_state,uint16,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,b_fto_rates,float32,"[43203, 10]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,b_t_rates,float32,"[43203, 8]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,epoch,int64,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,f_elec_denergy,float32,"[43203, 15]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,f_elec_energy,float32,"[43203, 15]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,f_elec_flux,float32,"[43203, 15]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,f_elec_flux_tot,float32,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,f_elec_flux_tot_unc,float32,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,f_elec_flux_unc,float32,"[43203, 15]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,f_f_rate,float32,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,f_ion_denergy,float32,"[43203, 28]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,f_ion_energy,float32,"[43203, 28]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,f_ion_flux,float32,"[43203, 28]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,f_ion_flux_tot,float32,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,f_ion_flux_tot_unc,float32,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,f_ion_flux_unc,float32,"[43203, 28]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,f_o_rate,float32,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,mapid,uint16,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,quality_flag,uint32,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,r_elec_denergy,float32,"[43203, 15]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,r_elec_energy,float32,"[43203, 15]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,r_elec_flux,float32,"[43203, 15]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,r_elec_flux_tot,float32,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,r_elec_flux_tot_unc,float32,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,r_elec_flux_unc,float32,"[43203, 15]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,r_f_rate,float32,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,r_ion_denergy,float32,"[43203, 28]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,r_ion_energy,float32,"[43203, 28]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,r_ion_flux,float32,"[43203, 28]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,r_ion_flux_tot,float32,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,r_ion_flux_tot_unc,float32,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,r_ion_flux_unc,float32,"[43203, 28]",,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,r_o_rate,float32,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,seq_cntr,uint16,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,time_ephemeris,float64,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,time_met,float64,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sep,s1-cal-svy-full,time_unix,float64,[43203],,,,cdf,mvn_sep_l2_s1-cal-svy-full_20241107_v04_r03.cdf
+sta,c6-32e64m,apid,<U2,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,att_ind,int16,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,bins,int16,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,bins_sc,int16,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,bkg,float32,"[21600, 64, 32]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,bkg_energy_labl_32,<U12,[32],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,bkg_mass_labl_64,<U10,[64],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,charge,float32,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,compno_3,int16,[3],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,compno_32,int16,[32],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,compno_4,int16,[4],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,compno_64,int16,[64],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,data,float32,"[21600, 64, 32]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,data_energy_labl_32,<U13,[32],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,data_mass_labl_64,<U11,[64],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,data_name,<U9,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,dead,float32,"[21600, 64, 32]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,dead_energy_labl_32,<U13,[32],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,dead_mass_labl_64,<U11,[64],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,dead_time_1,float32,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,dead_time_2,float32,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,dead_time_3,float32,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,denergy,float32,"[64, 32, 28]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,domega,float32,"[64, 32, 28]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,dphi,float32,"[64, 32, 28]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,dtheta,float32,"[64, 32, 28]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,eff,float32,"[64, 32, 128]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,eff_ind,int16,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,eflux,float32,"[21600, 64, 32]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,eflux_energy_labl_32,<U14,[32],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,eflux_mass_labl_64,<U12,[64],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,energy,float32,"[64, 32, 28]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,epoch,int64,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,eprom_ver,int16,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,geom_factor,float32,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,gf,float32,"[4, 32, 28]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,header,int32,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,magf,float32,"[21600, 3]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,magf_labl,<U2,[3],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,mass,float32,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,mass_arr,float32,"[64, 32, 28]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,mlut_ind,int16,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,mode,int16,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,nanode,int16,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,natt,int16,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,nbins,int16,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,ndef,int16,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,neff,int16,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,nenergy,int16,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,nmass,int16,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,nmlut,int16,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,nswp,int16,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,num_dists,int32,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,phi,float32,"[64, 32, 28]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,pos_sc_mso,float32,"[21600, 3]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,pos_sc_mso_labl,<U7,[3],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,project_name,<U5,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,quality_flag,int16,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,quat_mso,float32,"[21600, 4]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,quat_mso_labl,<U8,[4],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,quat_sc,float32,"[21600, 4]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,quat_sc_labl,<U7,[4],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,rate,int16,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,sc_pot,float32,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,spacecraft,<U1,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,swp_ind,int16,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,theta,float32,"[64, 32, 28]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,time_delta,float64,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,time_end,float64,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,time_ephemeris,float64,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,time_integ,float64,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,time_met,float64,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,time_start,float64,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,time_unix,float64,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,tof_arr,float32,"[64, 32, 9]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,twt_arr,float32,"[64, 32, 9]",,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,units_name,<U6,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,units_procedure,<U21,[],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+sta,c6-32e64m,valid,int16,[21600],,,,cdf,mvn_sta_l2_c6-32e64m_20241107_v02_r05.cdf
+swe,arc3d,accum_time,float32,[],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,az_label,<U3,[16],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,azim,float32,[16],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,binning,uint8,[10800],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,counts,float32,"[10800, 6, 16, 64]",,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,de_over_e,float32,[64],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,diff_en_fluxes,float32,"[10800, 6, 16, 64]",,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,dindex,uint8,[6],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,el_label,<U2,[6],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,elev,float32,"[6, 64]",,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,en_label,<U3,[64],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,energy,float32,[64],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,epoch,int64,[10800],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,g_azim,float32,[16],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,g_elev,float32,"[6, 64]",,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,g_engy,float32,[64],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,geom_factor,float32,[],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,num_dists,int32,[],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,quality,uint8,[10800],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,secondary,float32,"[10800, 6, 16, 64]",,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,time_met,float64,[10800],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,time_unix,float64,[10800],,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,arc3d,variance,float32,"[10800, 6, 16, 64]",,,,cdf,mvn_swe_l2_arc3d_20241107_v05_r02.cdf
+swe,svyspec,accum_time,float32,[],,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,counts,float32,"[43200, 64]",,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,de_over_e,float32,[64],,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,diff_en_fluxes,float32,"[43200, 64]",,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,en_label,<U3,[64],,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,energy,float32,[64],,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,epoch,int64,[43200],,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,g_engy,float32,[64],,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,geom_factor,float32,[],,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,num_accum,int16,[43200],,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,num_spec,int32,[],,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,quality,uint8,[43200],,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,secondary,float32,"[43200, 64]",,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,time_met,float64,[43200],,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,time_unix,float64,[43200],,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,variance,float32,"[43200, 64]",,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swe,svyspec,weight_factor,float32,[],,,,cdf,mvn_swe_l2_svyspec_20241107_v05_r03.cdf
+swi,coarsesvy3d,accum_time_coarse,float32,[],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,atten_state,uint8,[10800],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,counts,float32,"[10800, 16, 4, 48]",,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,de_over_e_coarse,float32,[],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,def_label,<U2,[4],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,diff_en_fluxes,float32,"[10800, 16, 4, 48]",,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,dindex,uint8,[4],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,en_label,<U3,[48],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,energy_coarse,float32,[48],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,epoch,int64,[10800],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,g_phi_atten_coarse,float32,[16],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,g_phi_coarse,float32,[16],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,g_theta_atten_coarse,float32,"[4, 48]",,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,g_theta_coarse,float32,"[4, 48]",,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,geom_factor,float32,[],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,grouping,uint8,[10800],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,num_accum,int16,[10800],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,num_dists,int16,[],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,phi_coarse,float32,[16],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,phi_label,<U3,[16],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,theta_atten_coarse,float32,"[4, 48]",,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,theta_coarse,float32,"[4, 48]",,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,time_met,float64,[10800],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,coarsesvy3d,time_unix,float64,[10800],,,,cdf,mvn_swi_l2_coarsesvy3d_20241107_v02_r01.cdf
+swi,onboardsvymom,atten_state,uint8,[21600],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,decom_flag,float32,[21600],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,density,float32,[21600],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,epoch,int64,[21600],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,num_mom,int16,[],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,p_label,<U3,[6],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,pindex,uint8,[6],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,pressure,float32,"[21600, 6]",,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,quality_flag,float32,[21600],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,t_label,<U2,[3],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,telem_mode,uint8,[21600],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,temperature,float32,"[21600, 3]",,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,temperature_mso,float32,"[21600, 3]",,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,time_met,float64,[21600],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,time_unix,float64,[21600],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,tindex,uint8,[3],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,v_label,<U2,[3],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,velocity,float32,"[21600, 3]",,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,velocity_mso,float32,"[21600, 3]",,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvymom,vindex,uint8,[3],,,,cdf,mvn_swi_l2_onboardsvymom_20241107_v02_r01.cdf
+swi,onboardsvyspec,accum_time_spectra,float32,[],,,,cdf,mvn_swi_l2_onboardsvyspec_20241107_v02_r01.cdf
+swi,onboardsvyspec,atten_state,uint8,[21600],,,,cdf,mvn_swi_l2_onboardsvyspec_20241107_v02_r01.cdf
+swi,onboardsvyspec,de_over_e_spectra,float32,[],,,,cdf,mvn_swi_l2_onboardsvyspec_20241107_v02_r01.cdf
+swi,onboardsvyspec,decom_flag,float32,[21600],,,,cdf,mvn_swi_l2_onboardsvyspec_20241107_v02_r01.cdf
+swi,onboardsvyspec,energy_spectra,float32,[48],,,,cdf,mvn_swi_l2_onboardsvyspec_20241107_v02_r01.cdf
+swi,onboardsvyspec,epoch,int64,[21600],,,,cdf,mvn_swi_l2_onboardsvyspec_20241107_v02_r01.cdf
+swi,onboardsvyspec,geom_factor,float32,[],,,,cdf,mvn_swi_l2_onboardsvyspec_20241107_v02_r01.cdf
+swi,onboardsvyspec,num_accum,int16,[21600],,,,cdf,mvn_swi_l2_onboardsvyspec_20241107_v02_r01.cdf
+swi,onboardsvyspec,num_spec,int16,[],,,,cdf,mvn_swi_l2_onboardsvyspec_20241107_v02_r01.cdf
+swi,onboardsvyspec,spectra_counts,float32,"[21600, 48]",,,,cdf,mvn_swi_l2_onboardsvyspec_20241107_v02_r01.cdf
+swi,onboardsvyspec,spectra_diff_en_fluxes,float32,"[21600, 48]",,,,cdf,mvn_swi_l2_onboardsvyspec_20241107_v02_r01.cdf
+swi,onboardsvyspec,time_met,float64,[21600],,,,cdf,mvn_swi_l2_onboardsvyspec_20241107_v02_r01.cdf
+swi,onboardsvyspec,time_unix,float64,[21600],,,,cdf,mvn_swi_l2_onboardsvyspec_20241107_v02_r01.cdf

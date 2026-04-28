@@ -24,6 +24,9 @@ from pathlib import Path
 import re
 
 import cdflib
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -349,6 +352,14 @@ def plot_spectra(
     forward_pitch_max_deg: float = 30.0,
     backward_pitch_min_deg: float = 150.0,
 ) -> None:
+    energy = np.asarray(energy, dtype=float)
+    forward_flux = np.asarray(forward_flux, dtype=float)
+    backward_flux = np.asarray(backward_flux, dtype=float)
+    order = np.argsort(energy)
+    energy = energy[order]
+    forward_flux = np.where(forward_flux[order] > 0.0, forward_flux[order], np.nan)
+    backward_flux = np.where(backward_flux[order] > 0.0, backward_flux[order], np.nan)
+
     plt.figure(figsize=(8, 5))
     plt.loglog(
         energy,
@@ -356,7 +367,7 @@ def plot_spectra(
         marker="o",
         markersize=3,
         linewidth=1.2,
-        label=f"Pitch < {forward_pitch_max_deg:g} deg",
+        label=f"Parallel, pitch < {forward_pitch_max_deg:g} deg",
     )
     plt.loglog(
         energy,
@@ -364,7 +375,7 @@ def plot_spectra(
         marker="s",
         markersize=3,
         linewidth=1.2,
-        label=f"Pitch > {backward_pitch_min_deg:g} deg",
+        label=f"Anti-parallel, pitch > {backward_pitch_min_deg:g} deg",
     )
     plt.xlabel("Energy (eV)")
     plt.ylabel("Differential energy flux")

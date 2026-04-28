@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import LogNorm, Normalize
+from matplotlib.colors import LogNorm
 
 from download_maven_data import parse_iso_timestamp
 
@@ -84,19 +84,6 @@ def prepare_heatmap(matrix, y_values, log_y: bool = False) -> tuple[np.ndarray, 
         order = order[y[order] > 0]
     y_sorted = y[order]
     return z[:, order].T, y_sorted
-
-
-def normalize_pad_matrix(matrix) -> np.ndarray:
-    z = np.asarray(matrix, dtype=float)
-    if z.ndim != 2:
-        return z
-    normalized = np.full_like(z, np.nan, dtype=float)
-    for index, row in enumerate(z):
-        valid = row[np.isfinite(row) & (row > 0.0)]
-        if valid.size == 0:
-            continue
-        normalized[index] = row / np.nanmean(valid)
-    return normalized
 
 
 def sample_altitude_km(sample: dict) -> float:
@@ -172,31 +159,6 @@ def mark_target_time(ax, target_unix: float) -> None:
     )
 
 
-def plot_spectrum_panel(ax, sample: dict):
-    energy = finite_array(sample.get("energy_eV"))
-    forward = finite_array(sample.get("forward_flux"))
-    backward = finite_array(sample.get("backward_flux"))
-    if energy.size == 0:
-        ax.text(0.5, 0.5, "No spectrum", transform=ax.transAxes, ha="center", va="center")
-        return
-    bands = [
-        ("knee", 50.0, 70.0, "#cc43381f"),
-        ("auger", 180.0, 320.0, "#2674c81f"),
-        ("dropoff", 550.0, 900.0, "#3a8a531f"),
-    ]
-    for label, start, end, color in bands:
-        ax.axvspan(start, end, color=color, label=label)
-    ax.loglog(energy, forward, color="#cc4338", marker="o", markersize=2.2, linewidth=1.0, label="forward")
-    ax.loglog(energy, backward, color="#2674c8", marker="s", markersize=2.2, linewidth=1.0, label="backward")
-    ax.set_xlim(0.1, 10000.0)
-    ax.set_ylim(1e3, 1e9)
-    ax.set_title("Directional Electron Spectra", loc="left", fontsize=10)
-    ax.set_xlabel("Energy (eV)")
-    ax.set_ylabel("Diff. energy flux")
-    ax.legend(loc="upper right", fontsize=7, frameon=False, ncol=2)
-    ax.grid(True, which="both", linestyle=":", alpha=0.25)
-
-
 def plot_data_panels(
     summary: dict,
     target_time: datetime,
@@ -215,11 +177,11 @@ def plot_data_panels(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(
-        10,
+        7,
         1,
-        figsize=(12.5, 25.0),
+        figsize=(12.5, 17.5),
         constrained_layout=True,
-        gridspec_kw={"height_ratios": [1.15, 1.15, 0.8, 0.8, 0.8, 0.75, 1.05, 1.05, 1.1, 0.55]},
+        gridspec_kw={"height_ratios": [1.15, 1.15, 0.8, 0.8, 0.75, 1.05, 0.55]},
     )
     axes_flat = axes.ravel()
 
@@ -274,24 +236,10 @@ def plot_data_panels(
         y_range=(-50.0, 50.0),
     )
 
-    model = overview.get("model_b_mso") or {}
-    if model.get("available"):
-        model_indices = window_indices(model.get("times_unix"), center_unix, window_seconds)
-        model_times = np.asarray(model.get("times_unix", []), dtype=float)[model_indices] if len(model_indices) else []
-        model_traces = [
-            ("Bx", LINE_COLORS["bx"], np.asarray(model.get("bx_nT", []), dtype=float)[model_indices]),
-            ("By", LINE_COLORS["by"], np.asarray(model.get("by_nT", []), dtype=float)[model_indices]),
-            ("Bz", LINE_COLORS["bz"], np.asarray(model.get("bz_nT", []), dtype=float)[model_indices]),
-        ] if len(model_indices) else []
-    else:
-        model_times = []
-        model_traces = []
-    plot_line_panel(axes_flat[4], model_times, model_traces, "Model B_MSO", "nT", y_range=(-30.0, 30.0))
-
     sample_times = np.asarray([iso_to_unix(sample["target_time"]) for sample in samples], dtype=float)
     sample_indices = window_indices(sample_times, center_unix, window_seconds)
     plot_line_panel(
-        axes_flat[5],
+        axes_flat[4],
         sample_times[sample_indices] if len(sample_indices) else [],
         [("Altitude", "#9a5f2f", np.asarray([sample_altitude_km(samples[i]) for i in sample_indices], dtype=float))],
         "Altitude",
@@ -301,38 +249,22 @@ def plot_data_panels(
     swe = overview.get("swe") or {}
     swe_indices = window_indices(swe.get("times_unix"), center_unix, window_seconds)
     swe_times = np.asarray(swe.get("times_unix", []), dtype=float)[swe_indices] if len(swe_indices) else []
-    pad_matrix = normalize_pad_matrix(
-        np.asarray(swe.get("pad_111_140_eflux", []), dtype=float)[swe_indices] if len(swe_indices) else []
-    )
+    pad_matrix = np.asarray(swe.get("pad_111_140_eflux", []), dtype=float)[swe_indices] if len(swe_indices) else []
     mesh = plot_heatmap(
-        axes_flat[6],
+        axes_flat[5],
         pad_matrix,
         swe_times,
         swe.get("pitch_deg", []),
         "SWE PAD (111-140 eV)",
         "Pitch angle (deg)",
-        norm=Normalize(vmin=0.6, vmax=1.4),
+        norm=LogNorm(vmin=1e3, vmax=1e9),
         cmap=PAD_CMAP,
     )
     if mesh:
-        fig.colorbar(mesh, ax=axes_flat[6], pad=0.01, label="norm. eflux")
+        fig.colorbar(mesh, ax=axes_flat[5], pad=0.01, label="eflux")
 
-    mesh = plot_heatmap(
-        axes_flat[7],
-        np.asarray(swe.get("omni_eflux", []), dtype=float)[swe_indices] if len(swe_indices) else [],
-        swe_times,
-        swe.get("energy_eV", []),
-        "SWE Energy",
-        "Energy (eV)",
-        log_y=True,
-        norm=LogNorm(vmin=1e3, vmax=1e9),
-    )
-    if mesh:
-        fig.colorbar(mesh, ax=axes_flat[7], pad=0.01, label="eflux")
-
-    plot_spectrum_panel(axes_flat[8], selected)
-    axes_flat[9].axis("off")
-    axes_flat[9].text(
+    axes_flat[6].axis("off")
+    axes_flat[6].text(
         0.0,
         0.95,
         "Selected sample\n"
@@ -343,14 +275,14 @@ def plot_data_panels(
         ha="left",
         va="top",
         fontsize=12,
-        transform=axes_flat[9].transAxes,
+        transform=axes_flat[6].transAxes,
     )
 
-    for ax in axes_flat[:8]:
+    for ax in axes_flat[:6]:
         ax.set_xlim(window_start, window_end)
         mark_target_time(ax, target_unix)
         ax.grid(True, linestyle=":", alpha=0.25)
-    for ax in axes_flat[:7]:
+    for ax in axes_flat[:5]:
         ax.tick_params(labelbottom=False)
     fig.suptitle("MAVEN Magnetic Topology Data Panels", fontsize=15)
     fig.savefig(output_path, dpi=180)

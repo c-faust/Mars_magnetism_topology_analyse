@@ -11,10 +11,19 @@ available, downloads missing files when allowed, then generates:
 
 import argparse
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from analyze_magnetic_topology import TOPOLOGY_RULES, analyze_interval, resolve_daily_files, sanitize_for_json
+import numpy as np
+
+from analyze_magnetic_topology import (
+    MARS_RADIUS_KM,
+    build_context_overview,
+    load_mag_day,
+    resolve_daily_files,
+    sanitize_for_json,
+    select_time_indices,
+)
 from download_maven_data import DEFAULT_DATA_ROOT, parse_iso_timestamp
 from mars_crustal_model import DEFAULT_MODEL_ROOT
 from plot_maven_data_panels import plot_data_panels
@@ -36,6 +45,10 @@ CONFIG = {
     "model_root": str(DEFAULT_MODEL_ROOT),
     "output_root": str(Path("outputs") / "maven_event_figures"),
 }
+
+
+def log_step(message: str) -> None:
+    print(f"[event] {datetime.now().isoformat(timespec='seconds')} | {message}", flush=True)
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -100,17 +113,77 @@ def runtime_config(args: argparse.Namespace) -> dict:
     }
 
 
+def build_panel_summary_without_topology(
+    start_time,
+    end_time,
+    resolved_files: dict,
+    model_root: Path,
+    step_seconds: int,
+) -> dict:
+    samples = []
+    for day, files in resolved_files.items():
+        mag_ss = load_mag_day(files["mag_ss"])
+        mag_times = np.asarray(mag_ss["times"], dtype=float)
+        day_start = max(start_time, datetime.combine(day, datetime.min.time(), tzinfo=start_time.tzinfo))
+        day_end = min(end_time, datetime.combine(day, datetime.max.time(), tzinfo=end_time.tzinfo))
+        indices = select_time_indices(mag_times, day_start, day_end, step_seconds)
+        for index in indices:
+            sample_time = datetime.fromtimestamp(float(mag_times[index]), tz=start_time.tzinfo)
+            position_km = np.asarray(mag_ss["data"][index, mag_ss["pos_indices"]], dtype=float)
+            position_rm = position_km / MARS_RADIUS_KM
+            altitude_km = float(np.linalg.norm(position_km) - MARS_RADIUS_KM)
+            samples.append(
+                {
+                    "target_time": sample_time.isoformat(timespec="seconds"),
+                    "topology": "not_computed",
+                    "altitude_km": altitude_km,
+                    "altitude_rm": altitude_km / MARS_RADIUS_KM,
+                    "position_km": position_km.tolist(),
+                    "position_rm": position_rm.tolist(),
+                    "positions_by_frame_km": {"ss": position_km.tolist()},
+                    "positions_by_frame_rm": {"ss": position_rm.tolist()},
+                }
+            )
+
+    if not samples:
+        raise ValueError("No MAG samples were found for the requested event window.")
+
+    return sanitize_for_json(
+        {
+            "start_time": start_time.isoformat(timespec="seconds"),
+            "end_time": end_time.isoformat(timespec="seconds"),
+            "step_seconds": step_seconds,
+            "topology_computed": False,
+            "context_overview": build_context_overview(start_time, end_time, resolved_files, model_root),
+            "samples": samples,
+        }
+    )
+
+
 def main() -> None:
+    log_step("Starting MAVEN event figure pipeline.")
     args = build_argument_parser().parse_args()
+    log_step("Parsing runtime configuration.")
     cfg = runtime_config(args)
     target_time = cfg["target_time"]
     half_window = timedelta(minutes=cfg["window_minutes"] / 2.0)
     start_time = target_time - half_window
     end_time = target_time + half_window
+    log_step(
+        "Configured event: "
+        f"target={target_time.isoformat(timespec='seconds')}, "
+        f"window={start_time.isoformat(timespec='seconds')} to {end_time.isoformat(timespec='seconds')}, "
+        f"step={cfg['step_seconds']}s."
+    )
+    log_step(f"Data root: {cfg['data_root']}")
+    log_step(f"Model root: {cfg['model_root']}")
+    log_step(f"Auto-download missing data: {cfg['auto_download_missing_data']}")
 
     event_dir = cfg["output_root"] / target_time.strftime("%Y%m%dT%H%M%S")
     event_dir.mkdir(parents=True, exist_ok=True)
+    log_step(f"Event output directory ready: {event_dir}")
 
+    log_step("Resolving required daily MAVEN files; missing files may be downloaded here.")
     resolved_files = resolve_daily_files(
         start=start_time,
         end=end_time,
@@ -120,7 +193,10 @@ def main() -> None:
         auto_download_missing_data=cfg["auto_download_missing_data"],
     )
     target_files = resolved_files[target_time.date()]
+    for key, path in target_files.items():
+        log_step(f"Resolved input file [{key}]: {path}")
 
+    log_step("Generating directional electron spectrum.")
     spectrum = process_target_time(
         target_time=target_time,
         pad_file=target_files["pad"],
@@ -129,7 +205,9 @@ def main() -> None:
         forward_pitch_max_deg=cfg["forward_pitch_max_deg"],
         backward_pitch_min_deg=cfg["backward_pitch_min_deg"],
     )
+    log_step("Directional electron spectrum complete.")
 
+    log_step("Generating orbit/crustal-field map.")
     orbit_result = plot_orbit_map(
         target_time=target_time,
         start_time=start_time,
@@ -141,27 +219,32 @@ def main() -> None:
         grid_step_deg=cfg["map_grid_step_deg"],
         model_max_degree=cfg["model_max_degree"],
     )
+    log_step(f"Orbit/crustal-field map complete: {orbit_result['output_path']}")
 
-    TOPOLOGY_RULES["pitch_angle"]["parallel_max_deg"] = cfg["forward_pitch_max_deg"]
-    TOPOLOGY_RULES["pitch_angle"]["anti_parallel_min_deg"] = cfg["backward_pitch_min_deg"]
-    _, topology_figure = analyze_interval(
-        start=start_time,
-        end=end_time,
-        data_root=cfg["data_root"],
+    log_step("Building data-panel context without magnetic-topology classification.")
+    topology_summary = build_panel_summary_without_topology(
+        start_time=start_time,
+        end_time=end_time,
+        resolved_files=resolved_files,
         model_root=cfg["model_root"],
-        output_root=event_dir / "topology_context",
         step_seconds=cfg["step_seconds"],
-        auto_download_missing_data=cfg["auto_download_missing_data"],
     )
-    topology_summary_path = topology_figure.parent / "topology_summary.json"
-    topology_summary = json.loads(topology_summary_path.read_text(encoding="utf-8"))
+    topology_summary_path = event_dir / "data_panel_context_summary.json"
+    topology_summary_path.write_text(
+        json.dumps(topology_summary, indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
+    )
+    log_step(f"Data-panel context summary written: {topology_summary_path}")
+    log_step("Generating MAVEN data panels.")
     panel_result = plot_data_panels(
         summary=topology_summary,
         target_time=target_time,
         output_path=event_dir / "maven_data_panels.png",
         window_minutes=cfg["window_minutes"],
     )
+    log_step(f"MAVEN data panels complete: {panel_result['output_path']}")
 
+    log_step("Writing event pipeline summary.")
     summary = sanitize_for_json(
         {
             "target_time": target_time.isoformat(timespec="seconds"),
@@ -183,8 +266,9 @@ def main() -> None:
                 "spectrum_summary": str(event_dir / "spectra" / target_time.strftime("%Y%m%dT%H%M%S") / "spectrum_summary.json"),
                 "spectrum_png": str(event_dir / "spectra" / target_time.strftime("%Y%m%dT%H%M%S") / "directional_electron_spectra.png"),
                 "orbit_map_png": orbit_result["output_path"],
-                "topology_summary_json": str(topology_summary_path),
-                "topology_trajectory_png": str(topology_figure),
+                "topology_summary_json": None,
+                "topology_trajectory_png": None,
+                "data_panel_context_summary_json": str(topology_summary_path),
                 "data_panels_png": panel_result["output_path"],
             },
             "spectrum": spectrum.__dict__,
@@ -194,6 +278,8 @@ def main() -> None:
     )
     summary_path = event_dir / "event_pipeline_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+    log_step(f"Event pipeline summary written: {summary_path}")
+    log_step("MAVEN event figure pipeline finished.")
     print(json.dumps(summary["outputs"], indent=2, ensure_ascii=False))
 
 
