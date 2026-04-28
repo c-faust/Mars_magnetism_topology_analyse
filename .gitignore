@@ -1,0 +1,14 @@
+# 数据文件夹
+data/
+
+# 输出结果
+outputs/
+
+
+# Python 缓存
+__pycache__/
+
+
+machine_learning/data/
+
+machine_learning/outputs/
