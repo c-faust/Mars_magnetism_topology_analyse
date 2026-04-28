@@ -39,6 +39,8 @@ class SpectrumResult:
     pad_file: str
     mag_file: str
     magnetic_field_nT: list[float]
+    forward_pitch_max_deg: float
+    backward_pitch_min_deg: float
     energy_eV: list[float]
     forward_flux: list[float]
     backward_flux: list[float]
@@ -265,18 +267,23 @@ def format_unix_time(value: float) -> str:
     return datetime.fromtimestamp(value, tz=timezone.utc).isoformat(timespec="seconds")
 
 
-def compute_directional_spectra(pad_data: dict, target_time: datetime) -> tuple[np.ndarray, np.ndarray, int, np.ndarray, np.ndarray]:
+def compute_directional_spectra(
+    pad_data: dict,
+    target_time: datetime,
+    forward_pitch_max_deg: float = 30.0,
+    backward_pitch_min_deg: float = 150.0,
+) -> tuple[np.ndarray, np.ndarray, int, np.ndarray, np.ndarray]:
     time_index = locate_nearest_index(pad_data["times"], target_time)
     flux_at_time = np.asarray(pad_data["flux"][time_index], dtype=float)
     pitch = np.asarray(pad_data["pitch"], dtype=float)
 
     if pitch.ndim == 1:
-        forward_mask = pitch < 30.0
-        backward_mask = pitch > 150.0
+        forward_mask = pitch < forward_pitch_max_deg
+        backward_mask = pitch > backward_pitch_min_deg
         if not np.any(forward_mask):
-            raise ValueError("No pitch-angle bins satisfy pitch < 30 degrees.")
+            raise ValueError(f"No pitch-angle bins satisfy pitch < {forward_pitch_max_deg:g} degrees.")
         if not np.any(backward_mask):
-            raise ValueError("No pitch-angle bins satisfy pitch > 150 degrees.")
+            raise ValueError(f"No pitch-angle bins satisfy pitch > {backward_pitch_min_deg:g} degrees.")
         forward_flux = np.nanmean(flux_at_time[forward_mask, :], axis=0)
         backward_flux = np.nanmean(flux_at_time[backward_mask, :], axis=0)
         return forward_flux, backward_flux, time_index, pitch[forward_mask], pitch[backward_mask]
@@ -288,8 +295,8 @@ def compute_directional_spectra(pad_data: dict, target_time: datetime) -> tuple[
     backward_bins: list[float] = []
     for energy_index in range(flux_at_time.shape[1]):
         pitch_column = pitch_at_time[:, energy_index]
-        forward_mask = pitch_column < 30.0
-        backward_mask = pitch_column > 150.0
+        forward_mask = pitch_column < forward_pitch_max_deg
+        backward_mask = pitch_column > backward_pitch_min_deg
         if np.any(forward_mask):
             forward_flux[energy_index] = np.nanmean(flux_at_time[forward_mask, energy_index])
             forward_bins.extend(pitch_column[forward_mask].tolist())
@@ -298,9 +305,9 @@ def compute_directional_spectra(pad_data: dict, target_time: datetime) -> tuple[
             backward_bins.extend(pitch_column[backward_mask].tolist())
 
     if np.all(np.isnan(forward_flux)):
-        raise ValueError("No pitch-angle bins satisfy pitch < 30 degrees.")
+        raise ValueError(f"No pitch-angle bins satisfy pitch < {forward_pitch_max_deg:g} degrees.")
     if np.all(np.isnan(backward_flux)):
-        raise ValueError("No pitch-angle bins satisfy pitch > 150 degrees.")
+        raise ValueError(f"No pitch-angle bins satisfy pitch > {backward_pitch_min_deg:g} degrees.")
 
     return (
         forward_flux,
@@ -334,10 +341,31 @@ def build_output_dir(target_time: datetime, output_root: Path) -> Path:
     return directory
 
 
-def plot_spectra(energy: np.ndarray, forward_flux: np.ndarray, backward_flux: np.ndarray, output_path: Path) -> None:
+def plot_spectra(
+    energy: np.ndarray,
+    forward_flux: np.ndarray,
+    backward_flux: np.ndarray,
+    output_path: Path,
+    forward_pitch_max_deg: float = 30.0,
+    backward_pitch_min_deg: float = 150.0,
+) -> None:
     plt.figure(figsize=(8, 5))
-    plt.loglog(energy, forward_flux, marker="o", markersize=3, linewidth=1.2, label="Pitch < 30 deg")
-    plt.loglog(energy, backward_flux, marker="s", markersize=3, linewidth=1.2, label="Pitch > 150 deg")
+    plt.loglog(
+        energy,
+        forward_flux,
+        marker="o",
+        markersize=3,
+        linewidth=1.2,
+        label=f"Pitch < {forward_pitch_max_deg:g} deg",
+    )
+    plt.loglog(
+        energy,
+        backward_flux,
+        marker="s",
+        markersize=3,
+        linewidth=1.2,
+        label=f"Pitch > {backward_pitch_min_deg:g} deg",
+    )
     plt.xlabel("Energy (eV)")
     plt.ylabel("Differential energy flux")
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
@@ -352,16 +380,28 @@ def process_target_time(
     pad_file: Path,
     mag_file: Path,
     output_root: Path,
+    forward_pitch_max_deg: float = 30.0,
+    backward_pitch_min_deg: float = 150.0,
 ) -> SpectrumResult:
     pad_data = load_pad_data(pad_file)
     forward_flux, backward_flux, pad_index, forward_bins, backward_bins = compute_directional_spectra(
-        pad_data, target_time
+        pad_data,
+        target_time,
+        forward_pitch_max_deg=forward_pitch_max_deg,
+        backward_pitch_min_deg=backward_pitch_min_deg,
     )
     magnetic_field, mag_time = nearest_mag_vector(mag_file, target_time)
     output_dir = build_output_dir(target_time, output_root)
 
     plot_path = output_dir / "directional_electron_spectra.png"
-    plot_spectra(pad_data["energy"], forward_flux, backward_flux, plot_path)
+    plot_spectra(
+        pad_data["energy"],
+        forward_flux,
+        backward_flux,
+        plot_path,
+        forward_pitch_max_deg=forward_pitch_max_deg,
+        backward_pitch_min_deg=backward_pitch_min_deg,
+    )
 
     result = SpectrumResult(
         target_time=target_time.isoformat(timespec="seconds"),
@@ -370,6 +410,8 @@ def process_target_time(
         pad_file=str(pad_file),
         mag_file=str(mag_file),
         magnetic_field_nT=magnetic_field.tolist(),
+        forward_pitch_max_deg=float(forward_pitch_max_deg),
+        backward_pitch_min_deg=float(backward_pitch_min_deg),
         energy_eV=pad_data["energy"].tolist(),
         forward_flux=forward_flux.tolist(),
         backward_flux=backward_flux.tolist(),
@@ -415,6 +457,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time", required=True, help="Target timestamp, for example 2024-11-07T12:00:00.")
     parser.add_argument("--pad-file", help="Path to the SWE PAD CDF file.")
     parser.add_argument("--mag-file", help="Path to the MAG STS file.")
+    parser.add_argument(
+        "--forward-pitch-max",
+        type=float,
+        default=30.0,
+        help="Upper pitch-angle bound, in degrees, used for the forward spectrum.",
+    )
+    parser.add_argument(
+        "--backward-pitch-min",
+        type=float,
+        default=150.0,
+        help="Lower pitch-angle bound, in degrees, used for the backward spectrum.",
+    )
     parser.add_argument("--data-root", default=str(DEFAULT_DATA_ROOT), help="Root directory for downloaded data.")
     parser.add_argument(
         "--output-root",
@@ -448,7 +502,14 @@ def main() -> None:
         extension="sts",
     )
 
-    result = process_target_time(target_time=target_time, pad_file=pad_file, mag_file=mag_file, output_root=output_root)
+    result = process_target_time(
+        target_time=target_time,
+        pad_file=pad_file,
+        mag_file=mag_file,
+        output_root=output_root,
+        forward_pitch_max_deg=args.forward_pitch_max,
+        backward_pitch_min_deg=args.backward_pitch_min,
+    )
     print(json.dumps(result.__dict__, indent=2, ensure_ascii=False))
 
 

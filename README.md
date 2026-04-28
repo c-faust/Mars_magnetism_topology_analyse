@@ -237,6 +237,90 @@ python analyze_magnetic_topology.py --start 2024-11-07T00:00:00 --end 2024-11-08
 - `outputs/magnetic_topology/<start>_<end>/magnetic_topology_trajectory.png`
 - `outputs/magnetic_topology/<start>_<end>/topology_summary.json`
 
+#### [plot_maven_orbit_map.py](/g:/本研/科学/MARS/ML/maven_code_linux/plot_maven_orbit_map.py)
+
+作用：
+- 绘制 MAVEN ground track 与火星壳磁场背景图
+- ground track 使用 `MAG pc1s` 中的 planetocentric 位置
+- 壳磁场背景使用 `Morschhauser et al. (2014)` 球谐模型
+- 默认绘制 `185 km` 高度处的 `|B|`
+- 默认经纬度网格步长为 `2°`
+
+普通运行方式：
+```bash
+python plot_maven_orbit_map.py --time 2024-11-07T02:15:00
+```
+
+常用参数：
+```bash
+python plot_maven_orbit_map.py --time 2024-11-07T02:15:00 --window-minutes 20 --crustal-altitude-km 185 --grid-step-deg 2 --model-max-degree 60
+```
+
+为了避免每次重复计算壳磁场背景，脚本会优先读取预计算缓存：
+- `data/models/mars_crustal/precomputed/morschhauser2014_alt185p000km_step2p000deg_deg60_lon000_180.npz`
+- `data/models/mars_crustal/precomputed/morschhauser2014_alt185p000km_step2p000deg_deg60_lon180_360.npz`
+
+如果缓存不存在，脚本会自动计算并保存。也可以手动预处理两个经度窗口：
+```bash
+python plot_maven_orbit_map.py --precompute-crustal-cache --crustal-altitude-km 185 --grid-step-deg 2 --model-max-degree 60
+```
+
+输出 summary 中的 `crustal_cache_hit` 可用于确认是否复用了缓存。
+
+#### [plot_maven_data_panels.py](/g:/本研/科学/MARS/ML/maven_code_linux/plot_maven_data_panels.py)
+
+作用：
+- 从 `topology_summary.json` 渲染静态数据面板 PNG
+- 面板采用单列纵向布局，便于上下对比同一时间窗口内的不同物理量
+- 前 8 个时间相关面板共享同一 x 轴范围
+- 每个时间相关面板用黑色竖虚线标记传入的 target time
+
+运行方式：
+```bash
+python plot_maven_data_panels.py --summary-json outputs/magnetic_topology/20241107T020000_20241107T030000/topology_summary.json --time 2024-11-07T02:15:00 --window-minutes 20
+```
+
+输出：
+- `outputs/maven_data_panels.png`
+
+#### [run_maven_event_figures.py](/g:/本研/科学/MARS/ML/maven_code_linux/run_maven_event_figures.py)
+
+作用：
+- 单个事件时间的总控入口
+- 自动检查所需 MAVEN 数据
+- 生成 directional electron spectra
+- 生成 orbit/crustal-field map
+- 生成 topology context
+- 生成单列 data panels
+- 汇总输出 `event_pipeline_summary.json`
+
+直接使用默认配置运行：
+```bash
+python run_maven_event_figures.py
+```
+
+指定事件时间运行：
+```bash
+python run_maven_event_figures.py --time 2015-01-05T00:30:00
+```
+
+推荐的快速本地运行方式：
+```bash
+python run_maven_event_figures.py --time 2015-01-05T00:30:00 --window-minutes 10 --step-seconds 60 --no-auto-download
+```
+
+说明：
+- 如果本地数据已经齐全，建议加 `--no-auto-download`，避免网络检查或下载导致运行变慢。
+- 壳磁场背景图会复用 `plot_maven_orbit_map.py` 的预计算缓存。
+- `analyze_interval()` 仍会生成完整 `context_overview`，包括沿 MAVEN 轨道的 `model_b_mso`，因此总控脚本比单独画 orbit map 更耗时。
+
+输出位置：
+- `outputs/maven_event_figures/<timestamp>/directional_electron_spectra.png`
+- `outputs/maven_event_figures/<timestamp>/orbit_crustal_map.png`
+- `outputs/maven_event_figures/<timestamp>/maven_data_panels.png`
+- `outputs/maven_event_figures/<timestamp>/event_pipeline_summary.json`
+- `outputs/maven_event_figures/<timestamp>/topology_context/<start>_<end>/topology_summary.json`
+
 #### [magnetic_topology_viewer.html](/g:/本研/科学/MARS/ML/maven_code_linux/magnetic_topology_viewer.html)
 
 作用：
@@ -498,6 +582,31 @@ python run_maven_pipeline.py
 ### 2026-04-06 SWE PAD rainbow colorbar
 - Updated the normalized `SWE PAD` panel so its colorbar now uses a rainbow-style mapping closer to the paper-style reference bar: blue/purple at the low end, then cyan/green, then yellow/red at the high end.
 - This custom color mapping is only applied to the normalized `SWE PAD` panel and does not change the color mapping used by the other energy and mass plots.
+
+### 2026-04-06 Stable panel resizing during splitter drag
+- Improved `magnetic_topology_viewer.html` so the orbit view and third-column data plots redraw continuously while dragging the splitters, instead of only after the drag ends.
+- Added resize-observer based redraws so browser resizing and zoom-driven layout changes keep the plot proportions more stable and adaptive.
+
+### 2026-04-06 Adaptive focused-plot layout
+- Improved the enlarged center-panel view in `magnetic_topology_viewer.html` so the focused plot area uses a more adaptive grid layout instead of relying on a fixed height subtraction.
+- Updated the focused plot renderer to scale margins, axis spacing, and font sizes with the actual canvas dimensions, reducing width/height distortion after splitter drags.
+
+### 2026-04-07 Textured Mars globe in orbit view
+- Updated the center orbit view in `magnetic_topology_viewer.html` so the Mars sphere now uses a locally generated surface texture instead of a plain shaded circle.
+- The texture remains fully offline and is generated inside the page, making the orbit visualization feel more realistic without depending on external web assets.
+
+### 2026-04-28 Orbit map cache and event figures
+- Updated `plot_maven_orbit_map.py` so the crustal magnetic-field background defaults to `185 km` altitude and `2°` latitude/longitude spacing.
+- Added reusable `.npz` cache files for the two longitude windows used by the orbit map: `0-180°` and `180-360°`.
+- Added `--precompute-crustal-cache` to precompute the two Morschhauser 2014 crustal-field backgrounds before plotting.
+- Vectorized the crustal-field grid calculation so first-time cache generation is much faster while matching the original scalar evaluator to floating-point precision.
+- Updated `run_maven_event_figures.py` to use the `185 km / 2°` crustal-field map defaults.
+
+### 2026-04-28 Single-column static data panels
+- Updated `plot_maven_data_panels.py` to render the static data panels in one vertical column for easier cross-panel comparison.
+- Added a black dashed vertical marker at the requested target time on every time-dependent panel.
+- Set a shared x-axis window across the time panels so the target-time marker aligns vertically.
+- Updated UTC datetime handling in the static panel renderer to avoid Python deprecation warnings.
 ## Data Shape Flow
 
 This section explains how array shapes change from raw MAVEN files to the final visualization JSON and then to the HTML plots.

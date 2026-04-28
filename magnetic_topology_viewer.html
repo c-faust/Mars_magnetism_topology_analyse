@@ -85,6 +85,10 @@
   h1 { font-size: 20px; margin-bottom: 8px; }
   h2 { font-size: 15px; margin-bottom: 6px; }
   .stack { display: grid; gap: 8px; }
+  .data-column > .stack {
+    height: 100%;
+    min-height: 0;
+  }
   .controls, .selection, .legend-box { padding: 10px; }
   .field { display: grid; gap: 4px; }
   .field label { font-size: 12px; color: var(--muted); }
@@ -113,6 +117,10 @@
     position: relative;
     height: calc(100vh - 16px);
     min-height: 640px;
+  }
+  #focusStage {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
   }
   .viewer-stage.hidden {
     display: none;
@@ -306,10 +314,10 @@
   .focus-body {
     padding: 14px;
     display: grid;
-    grid-template-columns: 1fr 68px;
-    gap: 12px;
+    grid-template-columns: minmax(0, 1fr) clamp(54px, 7vw, 76px);
+    gap: 10px;
     min-height: 0;
-    height: calc(100% - 56px);
+    height: auto;
   }
   .focus-body.single {
     grid-template-columns: 1fr;
@@ -318,6 +326,9 @@
   #focusLegendCanvas {
     width: 100%;
     height: 100%;
+    min-width: 0;
+    min-height: 0;
+    display: block;
     border-radius: 12px;
     background: #fff;
     border: 1px solid #e3d9cb;
@@ -476,6 +487,8 @@
     drag: null,
     pickPoints: [],
     focusedPanel: null,
+    redrawFrame: 0,
+    marsTexture: null,
   };
 
   const ui = {
@@ -674,6 +687,7 @@
           const next = Math.min(Math.max(startRight - delta, minRight), maxRight);
           rootStyle().setProperty("--right-width", `${next}px`);
         }
+        scheduleResponsiveRedraw();
       };
 
       const onUp = () => {
@@ -690,6 +704,15 @@
       splitter.addEventListener("pointermove", onMove);
       splitter.addEventListener("pointerup", onUp);
       splitter.addEventListener("pointercancel", onUp);
+    });
+  }
+  function scheduleResponsiveRedraw() {
+    if (state.redrawFrame) return;
+    state.redrawFrame = window.requestAnimationFrame(() => {
+      state.redrawFrame = 0;
+      drawViewer();
+      renderPanels();
+      syncFocusedPanel();
     });
   }
   function resolveCanvas(target) {
@@ -814,6 +837,158 @@
       .filter((v) => Number.isFinite(v) && v > 0);
     return radii.length ? radii.reduce((a, b) => a + b, 0) / radii.length : Math.min(width, height) * 0.18;
   }
+  function pseudoNoise(x, y) {
+    const value = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+    return value - Math.floor(value);
+  }
+  function ensureMarsTexture() {
+    if (state.marsTexture) return state.marsTexture;
+    try {
+      const texture = document.createElement("canvas");
+      texture.width = 512;
+      texture.height = 256;
+      const ctx = texture.getContext("2d");
+      const w = texture.width;
+      const h = texture.height;
+
+      const base = ctx.createLinearGradient(0, 0, 0, h);
+      base.addColorStop(0, "#b66a42");
+      base.addColorStop(0.45, "#985234");
+      base.addColorStop(1, "#6e3928");
+      ctx.fillStyle = base;
+      ctx.fillRect(0, 0, w, h);
+
+      for (let i = 0; i < 24; i += 1) {
+        const x = pseudoNoise(i * 2.7, 1.1) * w;
+        const y = pseudoNoise(i * 4.9, 3.4) * h;
+        const rx = 22 + pseudoNoise(i * 6.3, 9.2) * 110;
+        const ry = 10 + pseudoNoise(i * 7.1, 5.8) * 54;
+        const alpha = 0.08 + pseudoNoise(i * 8.2, 2.5) * 0.12;
+        ctx.fillStyle = `rgba(210, 148, 98, ${alpha.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.ellipse(x, y, rx, ry, pseudoNoise(i * 1.8, 7.7) * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.strokeStyle = "rgba(92, 44, 33, 0.28)";
+      ctx.lineWidth = 4;
+      for (let i = 0; i < 6; i += 1) {
+        const y = h * (0.2 + i * 0.12) + Math.sin(i * 0.9) * 10;
+        ctx.beginPath();
+        ctx.moveTo(-20, y);
+        for (let x = 0; x <= w + 20; x += 32) {
+          const curve = Math.sin((x / w) * Math.PI * (2.1 + i * 0.25) + i * 0.8) * (10 + i * 2);
+          ctx.lineTo(x, y + curve);
+        }
+        ctx.stroke();
+      }
+
+      const canyon = ctx.createLinearGradient(w * 0.18, h * 0.35, w * 0.82, h * 0.65);
+      canyon.addColorStop(0, "rgba(88, 36, 27, 0.00)");
+      canyon.addColorStop(0.25, "rgba(88, 36, 27, 0.20)");
+      canyon.addColorStop(0.5, "rgba(88, 36, 27, 0.32)");
+      canyon.addColorStop(0.75, "rgba(88, 36, 27, 0.20)");
+      canyon.addColorStop(1, "rgba(88, 36, 27, 0.00)");
+      ctx.strokeStyle = canyon;
+      ctx.lineWidth = 16;
+      ctx.beginPath();
+      ctx.moveTo(w * 0.1, h * 0.56);
+      ctx.bezierCurveTo(w * 0.28, h * 0.34, w * 0.58, h * 0.7, w * 0.9, h * 0.5);
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(230, 226, 218, 0.72)";
+      ctx.beginPath();
+      ctx.ellipse(w * 0.5, h * 0.04, w * 0.18, h * 0.08, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(w * 0.5, h * 0.96, w * 0.15, h * 0.06, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      state.marsTexture = texture;
+      return texture;
+    } catch (error) {
+      state.marsTexture = null;
+      return null;
+    }
+  }
+  function drawMarsSphere(c, center, radius) {
+    const texture = ensureMarsTexture();
+    const targetX = center.x - radius;
+    const targetY = center.y - radius;
+    const targetSize = radius * 2;
+
+    c.save();
+    c.beginPath();
+    c.arc(center.x, center.y, radius, 0, Math.PI * 2);
+    c.clip();
+    c.fillStyle = "#8f402c";
+    c.fillRect(targetX, targetY, targetSize, targetSize);
+    if (texture) {
+      const textureWidth = texture.width;
+      const textureHeight = texture.height;
+      const hemisphereWidth = textureWidth / 2;
+      const rotationWrapped = ((state.rotationY % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+      const sourceStart = (rotationWrapped / (Math.PI * 2)) * textureWidth;
+      const firstWidth = Math.min(hemisphereWidth, textureWidth - sourceStart);
+      c.drawImage(
+        texture,
+        sourceStart,
+        0,
+        firstWidth,
+        textureHeight,
+        targetX,
+        targetY,
+        targetSize * (firstWidth / hemisphereWidth),
+        targetSize,
+      );
+      if (firstWidth < hemisphereWidth) {
+        c.drawImage(
+          texture,
+          0,
+          0,
+          hemisphereWidth - firstWidth,
+          textureHeight,
+          targetX + targetSize * (firstWidth / hemisphereWidth),
+          targetY,
+          targetSize * ((hemisphereWidth - firstWidth) / hemisphereWidth),
+          targetSize,
+        );
+      }
+    }
+
+    const surfaceShade = c.createRadialGradient(
+      center.x - radius * 0.36,
+      center.y - radius * 0.42,
+      radius * 0.16,
+      center.x + radius * 0.22,
+      center.y + radius * 0.18,
+      radius * 1.08,
+    );
+    surfaceShade.addColorStop(0, "rgba(255, 226, 186, 0.34)");
+    surfaceShade.addColorStop(0.45, "rgba(255, 255, 255, 0.06)");
+    surfaceShade.addColorStop(0.74, "rgba(92, 42, 28, 0.12)");
+    surfaceShade.addColorStop(1, "rgba(28, 12, 9, 0.36)");
+    c.fillStyle = surfaceShade;
+    c.beginPath();
+    c.arc(center.x, center.y, radius, 0, Math.PI * 2);
+    c.fill();
+
+    c.strokeStyle = "rgba(255,255,255,0.16)";
+    c.lineWidth = Math.max(1, radius * 0.01);
+    for (let i = -60; i <= 60; i += 30) {
+      const ry = Math.cos(i * Math.PI / 180) * radius;
+      c.beginPath();
+      c.ellipse(center.x, center.y, radius, Math.abs(ry), 0, 0, Math.PI * 2);
+      c.stroke();
+    }
+    c.restore();
+
+    c.strokeStyle = "rgba(98, 45, 31, 0.55)";
+    c.lineWidth = Math.max(1.2, radius * 0.012);
+    c.beginPath();
+    c.arc(center.x, center.y, radius, 0, Math.PI * 2);
+    c.stroke();
+  }
 
   function drawViewer() {
     // This is the 3D orbit renderer.
@@ -829,22 +1004,7 @@
 
     const center = project([0, 0, 0], w, h);
     const radius = projectedMarsRadius(w, h);
-    const rg = c.createRadialGradient(center.x - radius * 0.3, center.y - radius * 0.35, radius * 0.18, center.x, center.y, radius * 1.1);
-    rg.addColorStop(0, "#d88d5e");
-    rg.addColorStop(0.6, "#b8623f");
-    rg.addColorStop(1, "#8f402c");
-    c.fillStyle = rg;
-    c.beginPath();
-    c.arc(center.x, center.y, radius, 0, Math.PI * 2);
-    c.fill();
-    c.strokeStyle = "rgba(255,255,255,0.25)";
-    c.lineWidth = 1;
-    for (let i = -60; i <= 60; i += 30) {
-      const ry = Math.cos(i * Math.PI / 180) * radius;
-      c.beginPath();
-      c.ellipse(center.x, center.y, radius, Math.abs(ry), 0, 0, Math.PI * 2);
-      c.stroke();
-    }
+    drawMarsSphere(c, center, radius);
 
     const points = currentPoints();
     const projected = points.map((p, i) => ({ i, p: project(p, w, h), topo: state.samples[i].topology }));
@@ -876,18 +1036,34 @@
     // The focused center plot gets larger margins/fonts than the small side
     // panels. That keeps axes readable after window swapping.
     if (expanded) {
+      const minDim = Math.max(1, Math.min(width, height));
+      const fontSize = clamp(Math.round(minDim * 0.026), 14, 18);
+      const smallFontSize = clamp(fontSize - 2, 12, 16);
       return {
-        pad: { l: 84, r: 24, t: 24, b: 42 },
-        font: "16px Segoe UI",
-        smallFont: "14px Segoe UI",
-        legendFont: "14px Segoe UI",
+        pad: {
+          l: clamp(Math.round(width * 0.11), 76, 116),
+          r: clamp(Math.round(width * 0.03), 18, 34),
+          t: clamp(Math.round(height * 0.04), 20, 34),
+          b: clamp(Math.round(height * 0.11), 40, 60),
+        },
+        font: `${fontSize}px Segoe UI`,
+        smallFont: `${smallFontSize}px Segoe UI`,
+        legendFont: `${smallFontSize}px Segoe UI`,
       };
     }
+    const minDim = Math.max(1, Math.min(width, height));
+    const fontSize = clamp(Math.round(minDim * 0.022), 12, 14);
+    const smallFontSize = clamp(fontSize - 1, 11, 13);
     return {
-      pad: { l: 64, r: 18, t: 16, b: 30 },
-      font: "13px Segoe UI",
-      smallFont: "12px Segoe UI",
-      legendFont: "13px Segoe UI",
+      pad: {
+        l: clamp(Math.round(width * 0.13), 58, 76),
+        r: clamp(Math.round(width * 0.03), 16, 22),
+        t: clamp(Math.round(height * 0.05), 14, 20),
+        b: clamp(Math.round(height * 0.18), 28, 36),
+      },
+      font: `${fontSize}px Segoe UI`,
+      smallFont: `${smallFontSize}px Segoe UI`,
+      legendFont: `${fontSize}px Segoe UI`,
     };
   }
 
@@ -1445,7 +1621,9 @@
     ui.focusTitle.textContent = title;
     ui.orbitStage.classList.add("hidden");
     ui.focusStage.classList.remove("hidden");
-    syncFocusedPanel();
+    window.requestAnimationFrame(() => {
+      syncFocusedPanel();
+    });
   }
 
   function showOrbitStage() {
@@ -1628,7 +1806,6 @@
   ui.slider.addEventListener("input", () => setSelectedIndex(Number(ui.slider.value)));
   ui.jumpTime.addEventListener("click", jumpToTime);
   ui.timeInput.addEventListener("keydown", (event) => { if (event.key === "Enter") jumpToTime(); });
-  window.addEventListener("resize", () => { drawViewer(); renderPanels(); syncFocusedPanel(); });
   document.querySelectorAll(".panel").forEach((panel) => {
     panel.addEventListener("click", () => {
       focusPanel(panel.dataset.panelTitle || "Focused Plot", panel.dataset.panelKey, panel.dataset.sourceCanvas, panel.dataset.sourceLegend || null);
@@ -1672,10 +1849,17 @@
   window.addEventListener("resize", () => {
     enforcePaneWidthBounds();
     persistPaneWidths();
-    drawViewer();
-    renderPanels();
-    syncFocusedPanel();
+    scheduleResponsiveRedraw();
   });
+
+  if (typeof ResizeObserver !== "undefined") {
+    const observer = new ResizeObserver(() => {
+      scheduleResponsiveRedraw();
+    });
+    [ui.app, ui.viewerColumn, ui.dataColumn, ui.orbitStage, ui.focusStage].forEach((element) => {
+      if (element) observer.observe(element);
+    });
+  }
 
   if (sessionStorage.getItem("maven_topology_json")) {
     ui.details.setAttribute("aria-disabled", "false");

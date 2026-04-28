@@ -173,7 +173,8 @@ def schmidt_semi_normalized_pnm(n: int, m: int, x: float) -> float:
     base = lpmv(m, n, x)
     log_ratio = gammaln(n - m + 1) - gammaln(n + m + 1)
     schmidt = np.sqrt((2.0 - (1.0 if m == 0 else 0.0)) * np.exp(log_ratio))
-    value = ((-1) ** m) * schmidt * base
+    with np.errstate(invalid="ignore", over="ignore"):
+        value = ((-1) ** m) * schmidt * base
     if not np.isfinite(value):
         return 0.0
     return float(value)
