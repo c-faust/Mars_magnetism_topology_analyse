@@ -242,7 +242,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--min-direction-valid-fraction",
         type=float,
-        default=0.1,
+        default=0.7,
         help="Discard samples where a used direction has less than this fraction of positive finite energy bins.",
     )
     parser.add_argument(

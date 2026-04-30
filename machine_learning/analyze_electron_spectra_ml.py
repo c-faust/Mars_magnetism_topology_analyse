@@ -281,24 +281,17 @@ def infer_swe_files(data_root: Path, start_unix: float | None, end_unix: float |
     return selected
 
 
-def fill_nonfinite_by_energy(spectra: np.ndarray) -> np.ndarray:
-    filled = np.asarray(spectra, dtype=float).copy()
-    positive = filled[np.isfinite(filled) & (filled > 0.0)]
-    fallback = float(np.nanmedian(positive)) if positive.size else 1.0
-
-    for energy_index in range(filled.shape[1]):
-        column = filled[:, energy_index]
-        valid = np.isfinite(column) & (column > 0.0)
-        replacement = float(np.nanmedian(column[valid])) if np.any(valid) else fallback
-        column[~valid] = replacement
-        filled[:, energy_index] = column
-    return filled
+def clean_flux_matrix(spectra: np.ndarray) -> np.ndarray:
+    cleaned = np.asarray(spectra, dtype=float).copy()
+    cleaned[~np.isfinite(cleaned)] = 0.0
+    cleaned[cleaned < 0.0] = 0.0
+    return cleaned
 
 
 def normalize_spectra(raw_spectra: np.ndarray, method: str) -> np.ndarray:
     log_step(f"Normalizing {raw_spectra.shape[0]} feature vector(s) with method={method}.")
-    filled = fill_nonfinite_by_energy(raw_spectra)
-    logged = np.log10(np.clip(filled, 1e-30, None))
+    cleaned = clean_flux_matrix(raw_spectra)
+    logged = np.log10(np.where(cleaned > 0.0, cleaned, 1e-30))
 
     if method == "log":
         return logged
@@ -353,9 +346,13 @@ def extract_directional_fluxes(
         parallel_mask = pitch_column < parallel_pitch_max_deg
         anti_parallel_mask = pitch_column > anti_parallel_pitch_min_deg
         if np.any(parallel_mask):
-            parallel_flux[energy_index] = np.nanmean(flux_at_time[parallel_mask, energy_index])
+            values = flux_at_time[parallel_mask, energy_index]
+            if np.any(np.isfinite(values)):
+                parallel_flux[energy_index] = np.nanmean(values)
         if np.any(anti_parallel_mask):
-            anti_parallel_flux[energy_index] = np.nanmean(flux_at_time[anti_parallel_mask, energy_index])
+            values = flux_at_time[anti_parallel_mask, energy_index]
+            if np.any(np.isfinite(values)):
+                anti_parallel_flux[energy_index] = np.nanmean(values)
     return {"parallel": parallel_flux, "anti_parallel": anti_parallel_flux}
 
 
@@ -602,21 +599,21 @@ def plot_cluster_spectra(
         members = np.flatnonzero(labels == cluster_index)
         if direction == "parallel":
             member_flux = np.asarray([samples[index].parallel_flux for index in members], dtype=float)
-            center_flux = np.nanmedian(fill_nonfinite_by_energy(member_flux), axis=0)
+            center_flux = np.nanmedian(clean_flux_matrix(member_flux), axis=0)
             representative_flux = samples[sample_index].parallel_flux
             ax.loglog(energy, center_flux, color="#1f77b4", linewidth=1.6, label="parallel median")
             ax.loglog(energy, representative_flux, color="#d62728", linewidth=1.1, alpha=0.8, label="nearest time")
         elif direction == "anti_parallel":
             member_flux = np.asarray([samples[index].anti_parallel_flux for index in members], dtype=float)
-            center_flux = np.nanmedian(fill_nonfinite_by_energy(member_flux), axis=0)
+            center_flux = np.nanmedian(clean_flux_matrix(member_flux), axis=0)
             representative_flux = samples[sample_index].anti_parallel_flux
             ax.loglog(energy, center_flux, color="#1f77b4", linewidth=1.6, label="anti-parallel median")
             ax.loglog(energy, representative_flux, color="#d62728", linewidth=1.1, alpha=0.8, label="nearest time")
         else:
             parallel_member_flux = np.asarray([samples[index].parallel_flux for index in members], dtype=float)
             anti_member_flux = np.asarray([samples[index].anti_parallel_flux for index in members], dtype=float)
-            parallel_center = np.nanmedian(fill_nonfinite_by_energy(parallel_member_flux), axis=0)
-            anti_center = np.nanmedian(fill_nonfinite_by_energy(anti_member_flux), axis=0)
+            parallel_center = np.nanmedian(clean_flux_matrix(parallel_member_flux), axis=0)
+            anti_center = np.nanmedian(clean_flux_matrix(anti_member_flux), axis=0)
             ax.loglog(energy, parallel_center, color="#1f77b4", linewidth=1.6, label="parallel median")
             ax.loglog(energy, anti_center, color="#ff7f0e", linewidth=1.6, label="anti-parallel median")
             ax.loglog(
@@ -833,7 +830,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--normalization",
         choices=("log", "global_zscore", "zscore", "minmax", "l2"),
         default="log",
-        help="Preprocessing after missing-value filling; log preserves parallel/anti-parallel flux differences.",
+        help="Preprocessing after converting invalid/negative flux to zero; log preserves parallel/anti-parallel flux differences.",
     )
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT), help="Directory for ML outputs.")
     return parser

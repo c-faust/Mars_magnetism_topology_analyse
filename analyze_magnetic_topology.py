@@ -323,6 +323,15 @@ def median_valid(values: np.ndarray, axis: int) -> np.ndarray:
     return np.nanmedian(np.asarray(values, dtype=float), axis=axis)
 
 
+def average_positive_flux(values: np.ndarray, axis: int) -> np.ndarray:
+    flux = np.asarray(values, dtype=float)
+    valid = np.isfinite(flux) & (flux > 0.0)
+    summed = np.sum(np.where(valid, flux, 0.0), axis=axis)
+    counts = np.sum(valid, axis=axis)
+    averaged = np.divide(summed, counts, out=np.zeros_like(summed, dtype=float), where=counts > 0)
+    return np.nan_to_num(averaged, nan=0.0, posinf=0.0, neginf=0.0)
+
+
 def load_static_context(path: Path, start: datetime, end: datetime) -> dict | None:
     cdf = cdflib.CDF(str(path))
     times = normalize_cdf_times(cdf, path)
@@ -349,8 +358,8 @@ def load_static_context(path: Path, start: datetime, end: datetime) -> dict | No
     mass_axis_values = np.nanmedian(mass_arr, axis=(1, 2))
     selected_flux = flux[time_mask]
 
-    energy_spectrogram = np.nanmedian(selected_flux, axis=1)
-    mass_spectrogram = np.nanmedian(selected_flux, axis=2)
+    energy_spectrogram = average_positive_flux(selected_flux, axis=1)
+    mass_spectrogram = average_positive_flux(selected_flux, axis=2)
     selected_times = times[time_mask]
 
     return {
