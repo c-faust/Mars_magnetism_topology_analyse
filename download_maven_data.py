@@ -69,6 +69,7 @@ class ProductSpec:
 PIPELINE_PRODUCTS = (
     ProductSpec("swe", "svypad", ("svypad",)),
     ProductSpec("sta", "c6-32e64m", ("c6-32e64m", "32e64m"), format_preference=("cdf",)),
+    ProductSpec("lpw", "mrgscpot", ("mrgscpot",), format_preference=("cdf",)),
     ProductSpec("mag", "sunstate-1sec", ("sunstate-1sec", "ss1s"), format_preference=("sts", "tab")),
     ProductSpec("mag", "planetocentric-1sec", ("planetocentric-1sec", "pc1s"), format_preference=("sts", "tab")),
 )

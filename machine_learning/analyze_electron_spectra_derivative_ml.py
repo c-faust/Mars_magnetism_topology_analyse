@@ -14,9 +14,10 @@ import argparse
 import csv
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
+import cdflib
 import matplotlib
 
 matplotlib.use("Agg")
@@ -28,7 +29,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from process_maven_spectra import format_unix_time, load_pad_data
+from download_maven_data import PIPELINE_PRODUCTS, build_session, download_product_for_day, parse_filename
+from process_maven_spectra import (
+    format_unix_time,
+    load_pad_data,
+    pick_first_variable,
+    unix_seconds_from_cdf_epoch,
+    unix_seconds_from_numeric_time,
+)
 from machine_learning.analyze_electron_spectra_ml import (
     DEFAULT_DATA_ROOT,
     ML_ROOT,
@@ -51,6 +59,188 @@ from machine_learning.analyze_electron_spectra_ml import (
 
 
 DEFAULT_OUTPUT_ROOT = ML_ROOT / "outputs" / "derivative_analysis"
+LPW_PRODUCTS = tuple(spec for spec in PIPELINE_PRODUCTS if spec.instrument == "lpw" and spec.datatype == "mrgscpot")
+DEFAULT_SCPOT_MIN_FLAG = 50.0
+DEFAULT_MIN_PLASMA_ENERGY_EV = 5.0
+
+
+def maven_file_date(path: Path) -> date | None:
+    parsed = parse_filename(path.name)
+    if not parsed:
+        return None
+    return date(int(parsed["year"]), int(parsed["month"]), int(parsed["day"]))
+
+
+def find_local_lpw_files_for_day(data_root: Path, day: date) -> list[Path]:
+    day_code = day.strftime("%Y%m%d")
+    matches: list[tuple[int, int, Path]] = []
+    for path in data_root.rglob("mvn_lpw_l2_mrgscpot_*.cdf"):
+        parsed = parse_filename(path.name)
+        if not parsed:
+            continue
+        if f"{parsed['year']}{parsed['month']}{parsed['day']}" == day_code:
+            matches.append((int(parsed["version"]), int(parsed["revision"]), path))
+    return [path for _, _, path in sorted(matches, key=lambda item: (item[0], item[1], str(item[2])), reverse=True)]
+
+
+def load_lpw_spacecraft_potential(path: Path, min_flag: float = DEFAULT_SCPOT_MIN_FLAG) -> dict[str, np.ndarray]:
+    cdf = cdflib.CDF(str(path))
+    time_values = pick_first_variable(cdf, ["time_unix", "epoch", "time_met"])
+    potential = pick_first_variable(cdf, ["data", "spacecraft_potential", "scpot"])
+    flag = pick_first_variable(cdf, ["flag"])
+    if time_values is None or potential is None or flag is None:
+        raise KeyError(f"No usable time/data/flag variables were found in {path.name}.")
+
+    if time_values.dtype.kind in {"i", "u"} and np.nanmedian(time_values) > 1e12:
+        times = unix_seconds_from_cdf_epoch(time_values)
+    else:
+        times = unix_seconds_from_numeric_time(time_values)
+
+    times = np.asarray(times, dtype=float).reshape(-1)
+    potential = np.asarray(potential, dtype=float).reshape(-1)
+    flag = np.asarray(flag, dtype=float).reshape(-1)
+    usable = np.isfinite(times) & np.isfinite(potential) & np.isfinite(flag) & (flag > min_flag)
+    if not np.any(usable):
+        raise ValueError(f"No high-quality LPW spacecraft-potential samples with flag>{min_flag:g} in {path.name}.")
+
+    good_times = times[usable]
+    good_potential = potential[usable]
+    good_flag = flag[usable]
+    order = np.argsort(good_times)
+    good_times = good_times[order]
+    good_potential = good_potential[order]
+    good_flag = good_flag[order]
+    unique_times, unique_indices = np.unique(good_times, return_index=True)
+    return {
+        "times": unique_times,
+        "spacecraft_potential": good_potential[unique_indices],
+        "flag": good_flag[unique_indices],
+    }
+
+
+def inspect_lpw_file(path: Path, min_flag: float = DEFAULT_SCPOT_MIN_FLAG) -> dict:
+    try:
+        data = load_lpw_spacecraft_potential(path, min_flag=min_flag)
+        times = data["times"]
+        return {
+            "status": "ok",
+            "path": str(path),
+            "time_start_utc": format_unix_time(float(times[0])),
+            "time_end_utc": format_unix_time(float(times[-1])),
+            "high_quality_samples": int(times.size),
+            "min_flag": min_flag,
+        }
+    except Exception as exc:
+        return {
+            "status": "read_error",
+            "path": str(path),
+            "time_start_utc": None,
+            "time_end_utc": None,
+            "high_quality_samples": 0,
+            "min_flag": min_flag,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def ensure_required_lpw_data(
+    data_root: Path,
+    required_dates: list[date],
+    auto_download: bool,
+    min_flag: float = DEFAULT_SCPOT_MIN_FLAG,
+) -> tuple[dict[date, Path], dict]:
+    unique_dates = sorted(set(required_dates))
+    log_step(f"Checking local LPW mrgscpot coverage for {len(unique_dates)} SWE day(s).")
+    report = {
+        "required_dates": [item.isoformat() for item in unique_dates],
+        "available": [],
+        "missing_dates": [],
+        "corrupt": [],
+        "downloaded": [],
+        "min_flag": min_flag,
+    }
+    usable_files_by_date: dict[date, Path] = {}
+
+    for day in unique_dates:
+        candidates = find_local_lpw_files_for_day(data_root, day)
+        if not candidates:
+            log_step(f"Missing local LPW mrgscpot file for {day.isoformat()}.")
+            report["missing_dates"].append(day.isoformat())
+            continue
+
+        for path in candidates:
+            info = inspect_lpw_file(path, min_flag=min_flag)
+            if info["status"] == "ok":
+                usable_files_by_date[day] = path
+                report["available"].append({"date": day.isoformat(), **info})
+                log_step(f"Available LPW {day.isoformat()}: {path.name}, {info['high_quality_samples']} high-quality sample(s).")
+                break
+            report["corrupt"].append({"date": day.isoformat(), **info})
+            log_step(f"Unreadable LPW file for {day.isoformat()}: {path.name} ({info.get('error', info['status'])}).")
+
+        if day not in usable_files_by_date:
+            report["missing_dates"].append(day.isoformat())
+
+    missing_dates = [date.fromisoformat(item) for item in report["missing_dates"]]
+    if missing_dates and auto_download:
+        if not LPW_PRODUCTS:
+            raise RuntimeError("No LPW mrgscpot product specification is available for auto-download.")
+        log_step(f"Auto-download enabled; downloading {len(missing_dates)} missing LPW day(s).")
+        session = build_session()
+        spec = LPW_PRODUCTS[0]
+        for index, day in enumerate(missing_dates, start=1):
+            try:
+                log_step(f"Downloading missing LPW day {index}/{len(missing_dates)}: {day.isoformat()}")
+                local_path = download_product_for_day(session=session, spec=spec, day=day, data_root=data_root)
+                info = inspect_lpw_file(local_path, min_flag=min_flag)
+                report["downloaded"].append({"date": day.isoformat(), **info})
+                if info["status"] == "ok":
+                    usable_files_by_date[day] = local_path
+            except FileNotFoundError as exc:
+                report["downloaded"].append({"date": day.isoformat(), "status": "missing_remote", "error": str(exc)})
+                log_step(f"No remote LPW mrgscpot file for {day.isoformat()}; SWE data for this day will be skipped.")
+
+    skipped_dates = [day.isoformat() for day in unique_dates if day not in usable_files_by_date]
+    report["skipped_swe_dates_without_usable_lpw"] = skipped_dates
+    log_step(f"LPW coverage check complete: {len(usable_files_by_date)}/{len(unique_dates)} SWE day(s) usable.")
+    return usable_files_by_date, report
+
+
+def interpolate_spacecraft_potential(lpw_data: dict[str, np.ndarray], target_times: np.ndarray) -> np.ndarray:
+    times = np.asarray(lpw_data["times"], dtype=float)
+    potential = np.asarray(lpw_data["spacecraft_potential"], dtype=float)
+    targets = np.asarray(target_times, dtype=float)
+    if times.size < 2:
+        return np.full(targets.shape, np.nan, dtype=float)
+    return np.interp(targets, times, potential, left=np.nan, right=np.nan)
+
+
+def correct_flux_to_plasma_energy(
+    measured_energy_eV: np.ndarray,
+    flux: np.ndarray,
+    spacecraft_potential_V: float,
+    target_energy_eV: np.ndarray,
+    min_plasma_energy_eV: float = DEFAULT_MIN_PLASMA_ENERGY_EV,
+) -> np.ndarray:
+    corrected_energy = np.asarray(measured_energy_eV, dtype=float) - float(spacecraft_potential_V)
+    values = np.asarray(flux, dtype=float)
+    usable = (
+        np.isfinite(corrected_energy)
+        & np.isfinite(values)
+        & (corrected_energy >= min_plasma_energy_eV)
+    )
+    if np.count_nonzero(usable) < 2:
+        return np.full(target_energy_eV.shape, np.nan, dtype=float)
+
+    source_energy = corrected_energy[usable]
+    source_flux = values[usable]
+    order = np.argsort(source_energy)
+    source_energy = source_energy[order]
+    source_flux = source_flux[order]
+    unique_energy, unique_indices = np.unique(source_energy, return_index=True)
+    unique_flux = source_flux[unique_indices]
+    if unique_energy.size < 2:
+        return np.full(target_energy_eV.shape, np.nan, dtype=float)
+    return np.interp(target_energy_eV, unique_energy, unique_flux, left=np.nan, right=np.nan)
 
 
 def normalize_derivative_features(matrix: np.ndarray, method: str) -> np.ndarray:
@@ -105,6 +295,9 @@ def load_derivative_samples(
     parallel_pitch_max_deg: float,
     anti_parallel_pitch_min_deg: float,
     min_direction_valid_fraction: float,
+    lpw_files_by_date: dict[date, Path] | None = None,
+    spacecraft_potential_min_flag: float = DEFAULT_SCPOT_MIN_FLAG,
+    min_plasma_energy_eV: float = DEFAULT_MIN_PLASMA_ENERGY_EV,
 ) -> tuple[np.ndarray, list[SpectrumSample]]:
     all_times: list[float] = []
     all_parallel_derivatives: list[np.ndarray] = []
@@ -113,19 +306,53 @@ def load_derivative_samples(
     all_files: list[str] = []
     derivative_energy: np.ndarray | None = None
     skipped_sparse = 0
+    skipped_no_lpw = 0
+    skipped_no_spacecraft_potential = 0
+    lpw_cache: dict[date, dict[str, np.ndarray]] = {}
+    apply_spacecraft_potential = lpw_files_by_date is not None
 
     if direction == "both":
         log_step("Derivative feature mode: paired dF/dE parallel + anti_parallel; one timestamp is one sample.")
     else:
         log_step(f"Derivative feature mode: single-direction dF/dE; using {direction}.")
     log_step(f"Minimum valid positive energy-bin fraction per used direction: {min_direction_valid_fraction:g}.")
+    if apply_spacecraft_potential:
+        log_step(
+            "Applying LPW spacecraft-potential correction "
+            f"(flag>{spacecraft_potential_min_flag:g}, Eplasma>= {min_plasma_energy_eV:g} eV)."
+        )
 
     for file_index, path in enumerate(files, start=1):
         log_step(f"Loading SWE file {file_index}/{len(files)}: {path.name}")
+        file_day = maven_file_date(path)
+        lpw_data = None
+        if apply_spacecraft_potential:
+            if file_day is None or file_day not in lpw_files_by_date:
+                skipped_no_lpw += 1
+                log_step(f"No usable LPW mrgscpot file for {path.name}; skipping this SWE day.")
+                continue
+            if file_day not in lpw_cache:
+                lpw_cache[file_day] = load_lpw_spacecraft_potential(
+                    lpw_files_by_date[file_day],
+                    min_flag=spacecraft_potential_min_flag,
+                )
+            lpw_data = lpw_cache[file_day]
+
         pad_data = load_pad_data(path)
         times = np.asarray(pad_data["times"], dtype=float)
         flux = np.asarray(pad_data["flux"], dtype=float)
         energy = np.asarray(pad_data["energy"], dtype=float)
+        target_plasma_energy = None
+        if apply_spacecraft_potential:
+            sorted_measured_energy = np.sort(energy[np.isfinite(energy)])
+            target_plasma_energy = sorted_measured_energy[sorted_measured_energy >= min_plasma_energy_eV]
+            if target_plasma_energy.size < 2:
+                raise ValueError(f"Energy grid in {path} has fewer than two bins at or above {min_plasma_energy_eV:g} eV.")
+            if derivative_energy is None:
+                derivative_energy = target_plasma_energy
+            elif derivative_energy.shape != target_plasma_energy.shape or not np.allclose(derivative_energy, target_plasma_energy):
+                log_step(f"Energy grid in {path.name} differs; spectra will be interpolated onto the first plasma-energy grid.")
+                target_plasma_energy = derivative_energy
 
         mask = np.ones(times.shape, dtype=bool)
         if start_unix is not None:
@@ -139,7 +366,20 @@ def load_derivative_samples(
 
         before_count = len(all_feature_vectors)
         pitch = np.asarray(pad_data["pitch"], dtype=float)
-        for time_index in selected:
+        spacecraft_potential = None
+        if apply_spacecraft_potential and lpw_data is not None:
+            spacecraft_potential = interpolate_spacecraft_potential(lpw_data, times[selected])
+        for selected_position, time_index in enumerate(selected):
+            phi_sc = None
+            if apply_spacecraft_potential:
+                if spacecraft_potential is None:
+                    skipped_no_spacecraft_potential += 1
+                    continue
+                phi_sc = float(spacecraft_potential[selected_position])
+                if not np.isfinite(phi_sc):
+                    skipped_no_spacecraft_potential += 1
+                    continue
+
             directional_fluxes = extract_directional_fluxes(
                 flux_at_time=np.asarray(flux[time_index], dtype=float),
                 pitch=pitch,
@@ -149,6 +389,21 @@ def load_derivative_samples(
             )
             parallel_flux = directional_fluxes["parallel"]
             anti_flux = directional_fluxes["anti_parallel"]
+            if apply_spacecraft_potential:
+                parallel_flux = correct_flux_to_plasma_energy(
+                    measured_energy_eV=energy,
+                    flux=parallel_flux,
+                    spacecraft_potential_V=phi_sc,
+                    target_energy_eV=target_plasma_energy,
+                    min_plasma_energy_eV=min_plasma_energy_eV,
+                )
+                anti_flux = correct_flux_to_plasma_energy(
+                    measured_energy_eV=energy,
+                    flux=anti_flux,
+                    spacecraft_potential_V=phi_sc,
+                    target_energy_eV=target_plasma_energy,
+                    min_plasma_energy_eV=min_plasma_energy_eV,
+                )
             if direction == "both":
                 if (
                     valid_flux_fraction(parallel_flux) < min_direction_valid_fraction
@@ -160,12 +415,14 @@ def load_derivative_samples(
                 skipped_sparse += 1
                 continue
 
-            sorted_energy, parallel_derivative = flux_derivative(energy, parallel_flux)
-            _, anti_derivative = flux_derivative(energy, anti_flux)
-            if derivative_energy is None:
-                derivative_energy = sorted_energy
-            elif derivative_energy.shape != sorted_energy.shape or not np.allclose(derivative_energy, sorted_energy):
-                raise ValueError(f"Energy grid in {path} does not match the first SWE file.")
+            derivative_input_energy = target_plasma_energy if apply_spacecraft_potential else energy
+            sorted_energy, parallel_derivative = flux_derivative(derivative_input_energy, parallel_flux)
+            _, anti_derivative = flux_derivative(derivative_input_energy, anti_flux)
+            if not apply_spacecraft_potential:
+                if derivative_energy is None:
+                    derivative_energy = sorted_energy
+                elif derivative_energy.shape != sorted_energy.shape or not np.allclose(derivative_energy, sorted_energy):
+                    raise ValueError(f"Energy grid in {path} does not match the first SWE file.")
 
             if direction == "both":
                 feature_vector = np.concatenate([parallel_derivative, anti_derivative])
@@ -185,6 +442,10 @@ def load_derivative_samples(
 
     if derivative_energy is None or not all_feature_vectors:
         raise ValueError("No derivative spectra were found for the requested interval.")
+    if skipped_no_lpw:
+        log_step(f"Skipped {skipped_no_lpw} SWE file(s) because no usable LPW mrgscpot file was available for that date.")
+    if skipped_no_spacecraft_potential:
+        log_step(f"Skipped {skipped_no_spacecraft_potential} timestamp(s) because spacecraft potential could not be interpolated.")
     if skipped_sparse:
         log_step(f"Skipped {skipped_sparse} timestamp(s) because directional spectra were too sparse.")
 
