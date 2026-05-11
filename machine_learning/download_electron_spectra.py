@@ -24,7 +24,7 @@ from process_maven_spectra import format_unix_time, load_pad_data
 
 
 ML_ROOT = Path(__file__).resolve().parent
-DEFAULT_DATA_ROOT = ML_ROOT / "data" / "maven"
+DEFAULT_DATA_ROOT = PROJECT_ROOT / "data" / "maven"
 DEFAULT_OUTPUT_ROOT = ML_ROOT / "outputs" / "downloads"
 SWE_PRODUCTS = tuple(spec for spec in PIPELINE_PRODUCTS if spec.instrument == "swe" and spec.datatype == "svypad")
 

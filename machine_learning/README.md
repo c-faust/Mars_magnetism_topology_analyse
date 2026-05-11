@@ -1,7 +1,7 @@
 # MAVEN Electron Spectra Machine Learning
 
 This folder is an independent workspace for machine-learning work on MAVEN SWE electron spectra.
-By default, both downloaded data and analysis products stay inside this folder.
+By default, downloaded data is shared with the project-level `data/maven` tree, while analysis products stay inside this folder.
 
 ## Files
 
@@ -53,7 +53,7 @@ python machine_learning/download_electron_spectra.py --year 2024
 
 Output:
 
-- `machine_learning/data/maven/swe/l2/svypad/...`
+- `data/maven/swe/l2/svypad/...`
 - `machine_learning/outputs/downloads/download_manifest.json`
 - `machine_learning/outputs/downloads/download_manifest.csv`
 
@@ -113,7 +113,7 @@ To plot SZA, altitude, and longitude-latitude distributions for the resulting cl
 python machine_learning/plot_cluster_spatial_distributions.py machine_learning/outputs/derivative_pca_gmm_analysis/<run_name>/full_assignments.csv
 ```
 
-Before analysis, the script checks whether `machine_learning/data/maven` contains every daily SWE `svypad` file needed by `--start` and `--end`. Missing days are downloaded automatically. To only check what is available or missing:
+Before analysis, the script checks whether `data/maven` contains every daily SWE `svypad` file needed by `--start` and `--end`. Missing days are downloaded automatically. To only check what is available or missing:
 
 ```bash
 python machine_learning/analyze_electron_spectra_ml.py --start 2024-11-01T00:00:00 --end 2024-11-08T00:00:00 --check-data-only

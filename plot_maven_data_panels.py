@@ -19,7 +19,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LogNorm
 
-from download_maven_data import parse_iso_timestamp
+from analyze_magnetic_topology import load_static_context
+from download_maven_data import DEFAULT_DATA_ROOT, parse_iso_timestamp
 
 
 MARS_RADIUS_KM = 3389.5
@@ -86,6 +87,42 @@ def prepare_heatmap(matrix, y_values, log_y: bool = False) -> tuple[np.ndarray, 
     return z[:, order].T, y_sorted
 
 
+def positive_log_norm(matrix, lower_percentile: float = 2.0, upper_percentile: float = 98.0) -> LogNorm | None:
+    values = np.asarray(matrix, dtype=float)
+    positive = values[np.isfinite(values) & (values > 0.0)]
+    if positive.size == 0:
+        return None
+    vmin = float(np.nanpercentile(positive, lower_percentile))
+    vmax = float(np.nanpercentile(positive, upper_percentile))
+    if not np.isfinite(vmin) or vmin <= 0.0:
+        vmin = float(np.nanmin(positive))
+    if not np.isfinite(vmax) or vmax <= vmin:
+        vmax = float(np.nanmax(positive))
+    if not np.isfinite(vmax) or vmax <= vmin:
+        vmax = vmin * 10.0
+    return LogNorm(vmin=vmin, vmax=vmax)
+
+
+def resolve_local_source(path_value: str | None, data_root: Path = DEFAULT_DATA_ROOT) -> Path | None:
+    if not path_value:
+        return None
+    source = Path(path_value).expanduser()
+    if source.exists():
+        return source.resolve()
+    matches = sorted(data_root.rglob(source.name))
+    return matches[0].resolve() if matches else None
+
+
+def reload_static_context_for_window(static: dict, center_unix: float, window_seconds: float) -> dict:
+    source = resolve_local_source(static.get("source_file"))
+    if source is None:
+        return static
+    start = datetime.fromtimestamp(center_unix - window_seconds / 2.0, tz=timezone.utc)
+    end = datetime.fromtimestamp(center_unix + window_seconds / 2.0, tz=timezone.utc)
+    reloaded = load_static_context(source, start, end)
+    return reloaded or static
+
+
 def sample_altitude_km(sample: dict) -> float:
     if sample.get("altitude_km") is not None:
         return float(sample["altitude_km"])
@@ -123,8 +160,8 @@ def plot_heatmap(
     time_edges = axis_edges(unix_to_matplotlib_dates(times), log_scale=False)
     y_edges = axis_edges(y_sorted, log_scale=log_y)
     mesh = ax.pcolormesh(time_edges, y_edges, z, shading="auto", cmap=cmap, norm=norm)
-    ax.set_title(title, loc="left", fontsize=10)
-    ax.set_ylabel(ylabel)
+    ax.set_title(title, loc="left", fontsize=18)
+    ax.set_ylabel(ylabel, fontsize=18)
     if log_y:
         ax.set_yscale("log")
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
@@ -135,16 +172,16 @@ def plot_line_panel(ax, times_unix, traces: list[tuple[str, str, np.ndarray]], t
     times = finite_array(times_unix)
     if len(times) == 0 or not traces:
         ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center")
-        ax.set_title(title, loc="left", fontsize=10)
+        ax.set_title(title, loc="left", fontsize=18)
         return
     x = [datetime.fromtimestamp(float(value), tz=timezone.utc) for value in times]
     for label, color, values in traces:
         ax.plot(x, values, color=color, linewidth=1.2, label=label)
-    ax.set_title(title, loc="left", fontsize=10)
-    ax.set_ylabel(ylabel)
+    ax.set_title(title, loc="left", fontsize=18)
+    ax.set_ylabel(ylabel, fontsize=18)
     if y_range:
         ax.set_ylim(*y_range)
-    ax.legend(loc="upper right", fontsize=7, frameon=False, ncol=min(3, len(traces)))
+    ax.legend(loc="upper right", fontsize=18, frameon=False, ncol=min(3, len(traces)))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
 
 
@@ -177,46 +214,66 @@ def plot_data_panels(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(
-        7,
+        8,
         1,
-        figsize=(12.5, 17.5),
+        figsize=(12.5, 19.5),
         constrained_layout=True,
-        gridspec_kw={"height_ratios": [1.15, 1.15, 0.8, 0.8, 0.75, 1.05, 0.55]},
+        gridspec_kw={"height_ratios": [1.15, 1.15, 1.15, 0.8, 0.8, 0.75, 1.05, 0.55]},
     )
     axes_flat = axes.ravel()
 
-    static = overview.get("static") or {}
+    static = reload_static_context_for_window(overview.get("static") or {}, center_unix, window_seconds)
     static_indices = window_indices(static.get("times_unix"), center_unix, window_seconds)
+    static_energy_matrix = np.asarray(static.get("energy_eflux", []), dtype=float)[static_indices] if len(static_indices) else []
     mesh = plot_heatmap(
         axes_flat[0],
-        np.asarray(static.get("energy_eflux", []), dtype=float)[static_indices] if len(static_indices) else [],
+        static_energy_matrix,
         np.asarray(static.get("times_unix", []), dtype=float)[static_indices] if len(static_indices) else [],
         static.get("energy_eV", []),
         "STATIC Energy",
         "Energy (eV)",
         log_y=True,
-        norm=LogNorm(vmin=1e3, vmax=1e9),
+        norm=positive_log_norm(static_energy_matrix),
     )
     if mesh:
         fig.colorbar(mesh, ax=axes_flat[0], pad=0.01, label="eflux")
 
+    static_mass_matrix = np.asarray(static.get("mass_eflux", []), dtype=float)[static_indices] if len(static_indices) else []
     mesh = plot_heatmap(
         axes_flat[1],
-        np.asarray(static.get("mass_eflux", []), dtype=float)[static_indices] if len(static_indices) else [],
+        static_mass_matrix,
         np.asarray(static.get("times_unix", []), dtype=float)[static_indices] if len(static_indices) else [],
         static.get("mass_amu", []),
         "STATIC Mass",
         "Mass (amu)",
-        norm=LogNorm(vmin=1e3, vmax=1e9),
+        norm=positive_log_norm(static_mass_matrix),
     )
     if mesh:
         fig.colorbar(mesh, ax=axes_flat[1], pad=0.01, label="eflux")
+
+    swe = overview.get("swe") or {}
+    swe_indices = window_indices(swe.get("times_unix"), center_unix, window_seconds)
+    swe_times = np.asarray(swe.get("times_unix", []), dtype=float)[swe_indices] if len(swe_indices) else []
+    electron_energy_matrix = np.asarray(swe.get("omni_eflux", []), dtype=float)[swe_indices] if len(swe_indices) else []
+    mesh = plot_heatmap(
+        axes_flat[2],
+        electron_energy_matrix,
+        swe_times,
+        swe.get("energy_eV", []),
+        "SWE Electron Energy",
+        "Energy (eV)",
+        log_y=True,
+        norm=LogNorm(vmin=1e3, vmax=1e9),
+        cmap=FLUX_CMAP,
+    )
+    if mesh:
+        fig.colorbar(mesh, ax=axes_flat[2], pad=0.01, label="eflux")
 
     mag = overview.get("mag") or {}
     mag_indices = window_indices(mag.get("times_unix"), center_unix, window_seconds)
     mag_times = np.asarray(mag.get("times_unix", []), dtype=float)[mag_indices] if len(mag_indices) else []
     plot_line_panel(
-        axes_flat[2],
+        axes_flat[3],
         mag_times,
         [("|B|", LINE_COLORS["bmag"], np.asarray(mag.get("bmag_nT", []), dtype=float)[mag_indices])],
         "|B|",
@@ -224,7 +281,7 @@ def plot_data_panels(
         y_range=(0.0, 50.0),
     )
     plot_line_panel(
-        axes_flat[3],
+        axes_flat[4],
         mag_times,
         [
             ("Bx", LINE_COLORS["bx"], np.asarray(mag.get("bx_nT", []), dtype=float)[mag_indices]),
@@ -239,19 +296,16 @@ def plot_data_panels(
     sample_times = np.asarray([iso_to_unix(sample["target_time"]) for sample in samples], dtype=float)
     sample_indices = window_indices(sample_times, center_unix, window_seconds)
     plot_line_panel(
-        axes_flat[4],
+        axes_flat[5],
         sample_times[sample_indices] if len(sample_indices) else [],
         [("Altitude", "#9a5f2f", np.asarray([sample_altitude_km(samples[i]) for i in sample_indices], dtype=float))],
         "Altitude",
         "km",
     )
 
-    swe = overview.get("swe") or {}
-    swe_indices = window_indices(swe.get("times_unix"), center_unix, window_seconds)
-    swe_times = np.asarray(swe.get("times_unix", []), dtype=float)[swe_indices] if len(swe_indices) else []
     pad_matrix = np.asarray(swe.get("pad_111_140_eflux", []), dtype=float)[swe_indices] if len(swe_indices) else []
     mesh = plot_heatmap(
-        axes_flat[5],
+        axes_flat[6],
         pad_matrix,
         swe_times,
         swe.get("pitch_deg", []),
@@ -261,10 +315,10 @@ def plot_data_panels(
         cmap=PAD_CMAP,
     )
     if mesh:
-        fig.colorbar(mesh, ax=axes_flat[5], pad=0.01, label="eflux")
+        fig.colorbar(mesh, ax=axes_flat[6], pad=0.01, label="eflux")
 
-    axes_flat[6].axis("off")
-    axes_flat[6].text(
+    axes_flat[7].axis("off")
+    axes_flat[7].text(
         0.0,
         0.95,
         "Selected sample\n"
@@ -275,14 +329,14 @@ def plot_data_panels(
         ha="left",
         va="top",
         fontsize=12,
-        transform=axes_flat[6].transAxes,
+        transform=axes_flat[7].transAxes,
     )
 
-    for ax in axes_flat[:6]:
+    for ax in axes_flat[:7]:
         ax.set_xlim(window_start, window_end)
         mark_target_time(ax, target_unix)
         ax.grid(True, linestyle=":", alpha=0.25)
-    for ax in axes_flat[:5]:
+    for ax in axes_flat[:6]:
         ax.tick_params(labelbottom=False)
     fig.suptitle("MAVEN Magnetic Topology Data Panels", fontsize=15)
     fig.savefig(output_path, dpi=180)

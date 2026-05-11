@@ -39,6 +39,7 @@ def main() -> None:
             target_time=target_time,
             pad_file=downloaded["swe_svypad"],
             mag_file=downloaded["mag_sunstate-1sec"],
+            lpw_file=downloaded["lpw_mrgscpot"],
             output_root=output_root,
         )
         all_results.append(result.__dict__)

@@ -24,11 +24,17 @@ from analyze_magnetic_topology import (
     sanitize_for_json,
     select_time_indices,
 )
-from download_maven_data import DEFAULT_DATA_ROOT, parse_iso_timestamp
+from download_maven_data import (
+    DEFAULT_DATA_ROOT,
+    PIPELINE_PRODUCTS,
+    build_session,
+    download_product_for_day,
+    parse_iso_timestamp,
+)
 from mars_crustal_model import DEFAULT_MODEL_ROOT
 from plot_maven_data_panels import plot_data_panels
 from plot_maven_orbit_map import plot_orbit_map
-from process_maven_spectra import process_target_time
+from process_maven_spectra import infer_daily_file, process_target_time
 
 
 CONFIG = {
@@ -160,6 +166,30 @@ def build_panel_summary_without_topology(
     )
 
 
+def resolve_lpw_mrgscpot_file(target_time: datetime, data_root: Path, auto_download: bool) -> Path:
+    try:
+        return infer_daily_file(
+            data_root=data_root,
+            instrument="lpw",
+            datatype_alias="mrgscpot",
+            day=target_time,
+            extension="cdf",
+        )
+    except FileNotFoundError:
+        if not auto_download:
+            raise
+
+    specs = [spec for spec in PIPELINE_PRODUCTS if spec.instrument == "lpw" and spec.datatype == "mrgscpot"]
+    if not specs:
+        raise RuntimeError("No LPW mrgscpot product specification is available for auto-download.")
+    return download_product_for_day(
+        session=build_session(),
+        spec=specs[0],
+        day=target_time.date(),
+        data_root=data_root,
+    )
+
+
 def main() -> None:
     log_step("Starting MAVEN event figure pipeline.")
     args = build_argument_parser().parse_args()
@@ -193,6 +223,11 @@ def main() -> None:
         auto_download_missing_data=cfg["auto_download_missing_data"],
     )
     target_files = resolved_files[target_time.date()]
+    target_files["lpw_mrgscpot"] = resolve_lpw_mrgscpot_file(
+        target_time=target_time,
+        data_root=cfg["data_root"],
+        auto_download=cfg["auto_download_missing_data"],
+    )
     for key, path in target_files.items():
         log_step(f"Resolved input file [{key}]: {path}")
 
@@ -201,6 +236,7 @@ def main() -> None:
         target_time=target_time,
         pad_file=target_files["pad"],
         mag_file=target_files["mag_ss"],
+        lpw_file=target_files["lpw_mrgscpot"],
         output_root=event_dir / "spectra",
         forward_pitch_max_deg=cfg["forward_pitch_max_deg"],
         backward_pitch_min_deg=cfg["backward_pitch_min_deg"],

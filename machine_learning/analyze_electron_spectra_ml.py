@@ -38,7 +38,7 @@ from process_maven_spectra import format_unix_time, load_pad_data
 
 
 ML_ROOT = Path(__file__).resolve().parent
-DEFAULT_DATA_ROOT = ML_ROOT / "data" / "maven"
+DEFAULT_DATA_ROOT = PROJECT_ROOT / "data" / "maven"
 DEFAULT_OUTPUT_ROOT = ML_ROOT / "outputs" / "analysis"
 SWE_PRODUCTS = tuple(spec for spec in PIPELINE_PRODUCTS if spec.instrument == "swe" and spec.datatype == "svypad")
 
@@ -184,7 +184,7 @@ def ensure_required_swe_data(
 ) -> tuple[list[Path], dict]:
     if start_dt is None or end_dt is None:
         log_step("No complete --start/--end interval was given; skipping date-by-date data coverage check.")
-        return [], {"required_dates": [], "available": [], "missing_dates": [], "corrupt": [], "downloaded": []}
+        return [], {"required_dates": [], "available": [], "missing_dates": [], "missing_remote": [], "corrupt": [], "downloaded": []}
 
     required_dates = iter_required_dates(start_dt, end_dt)
     log_step(f"Checking local SWE data coverage for {len(required_dates)} required day(s).")
@@ -192,6 +192,7 @@ def ensure_required_swe_data(
         "required_dates": [item.isoformat() for item in required_dates],
         "available": [],
         "missing_dates": [],
+        "missing_remote": [],
         "corrupt": [],
         "quarantined": [],
         "downloaded": [],
@@ -246,7 +247,12 @@ def ensure_required_swe_data(
                     )
                     log_step(f"Moved unreadable file aside before re-download: {quarantine_path.name}")
             log_step(f"Downloading missing day {index}/{len(missing_dates)}: {day.isoformat()}")
-            local_path = download_product_for_day(session=session, spec=spec, day=day, data_root=data_root)
+            try:
+                local_path = download_product_for_day(session=session, spec=spec, day=day, data_root=data_root)
+            except FileNotFoundError as exc:
+                report["missing_remote"].append({"date": day.isoformat(), "status": "missing_remote", "error": str(exc)})
+                log_step(f"No remote SWE svypad file for {day.isoformat()}; skipping this day.")
+                continue
             info = inspect_swe_file(local_path)
             report["downloaded"].append({"date": day.isoformat(), **info})
             if info["status"] != "ok":

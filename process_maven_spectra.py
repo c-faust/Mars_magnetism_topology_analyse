@@ -32,6 +32,8 @@ import numpy as np
 
 from download_maven_data import DEFAULT_DATA_ROOT, parse_filename, parse_iso_timestamp
 
+DEFAULT_SCPOT_MIN_FLAG = 50.0
+
 
 @dataclass(frozen=True)
 class SpectrumResult:
@@ -39,9 +41,13 @@ class SpectrumResult:
     target_time: str
     swe_time: str
     mag_time: str
+    lpw_time: str
     pad_file: str
     mag_file: str
+    lpw_file: str
     magnetic_field_nT: list[float]
+    spacecraft_potential_V: float
+    spacecraft_potential_marker_eV: float
     forward_pitch_max_deg: float
     backward_pitch_min_deg: float
     energy_eV: list[float]
@@ -338,6 +344,54 @@ def nearest_mag_vector(path: Path, target_time: datetime) -> tuple[np.ndarray, s
     return vector, format_unix_time(times[index])
 
 
+def load_lpw_spacecraft_potential(path: Path, min_flag: float = DEFAULT_SCPOT_MIN_FLAG) -> dict[str, np.ndarray]:
+    """Load high-quality LPW spacecraft-potential samples."""
+    cdf = cdflib.CDF(str(path))
+    time_values = pick_first_variable(cdf, ["time_unix", "epoch", "time_met"])
+    potential = pick_first_variable(cdf, ["data", "spacecraft_potential", "scpot"])
+    flag = pick_first_variable(cdf, ["flag"])
+    if time_values is None or potential is None or flag is None:
+        raise KeyError(f"No usable time/data/flag variables were found in {path.name}.")
+
+    if time_values.dtype.kind in {"i", "u"} and np.nanmedian(time_values) > 1e12:
+        times = unix_seconds_from_cdf_epoch(time_values)
+    else:
+        times = unix_seconds_from_numeric_time(time_values)
+
+    times = np.asarray(times, dtype=float).reshape(-1)
+    potential = np.asarray(potential, dtype=float).reshape(-1)
+    flag = np.asarray(flag, dtype=float).reshape(-1)
+    usable = np.isfinite(times) & np.isfinite(potential) & np.isfinite(flag) & (flag > min_flag)
+    if not np.any(usable):
+        raise ValueError(f"No high-quality LPW spacecraft-potential samples with flag>{min_flag:g} in {path.name}.")
+
+    good_times = times[usable]
+    good_potential = potential[usable]
+    good_flag = flag[usable]
+    order = np.argsort(good_times)
+    good_times = good_times[order]
+    good_potential = good_potential[order]
+    good_flag = good_flag[order]
+    unique_times, unique_indices = np.unique(good_times, return_index=True)
+    return {
+        "times": unique_times,
+        "spacecraft_potential": good_potential[unique_indices],
+        "flag": good_flag[unique_indices],
+    }
+
+
+def nearest_spacecraft_potential(
+    path: Path,
+    target_time: datetime,
+    min_flag: float = DEFAULT_SCPOT_MIN_FLAG,
+) -> tuple[float, str, float]:
+    lpw_data = load_lpw_spacecraft_potential(path, min_flag=min_flag)
+    index = locate_nearest_index(lpw_data["times"], target_time)
+    potential = float(lpw_data["spacecraft_potential"][index])
+    marker_eV = abs(potential)
+    return potential, format_unix_time(float(lpw_data["times"][index])), marker_eV
+
+
 def build_output_dir(target_time: datetime, output_root: Path) -> Path:
     directory = output_root / target_time.strftime("%Y%m%dT%H%M%S")
     directory.mkdir(parents=True, exist_ok=True)
@@ -349,6 +403,8 @@ def plot_spectra(
     forward_flux: np.ndarray,
     backward_flux: np.ndarray,
     output_path: Path,
+    spacecraft_potential_marker_eV: float | None = None,
+    spacecraft_potential_V: float | None = None,
     forward_pitch_max_deg: float = 30.0,
     backward_pitch_min_deg: float = 150.0,
 ) -> None:
@@ -359,6 +415,8 @@ def plot_spectra(
     energy = energy[order]
     forward_flux = np.where(forward_flux[order] > 0.0, forward_flux[order], np.nan)
     backward_flux = np.where(backward_flux[order] > 0.0, backward_flux[order], np.nan)
+    positive_energy = energy[np.isfinite(energy) & (energy > 0.0)]
+    x_limits = (float(np.nanmin(positive_energy)), float(np.nanmax(positive_energy))) if positive_energy.size else None
 
     plt.figure(figsize=(8, 5))
     plt.loglog(
@@ -377,6 +435,25 @@ def plot_spectra(
         linewidth=1.2,
         label=f"Anti-parallel, pitch > {backward_pitch_min_deg:g} deg",
     )
+    if (
+        spacecraft_potential_marker_eV is not None
+        and np.isfinite(spacecraft_potential_marker_eV)
+        and spacecraft_potential_marker_eV > 0.0
+    ):
+        label_value = (
+            spacecraft_potential_marker_eV
+            if spacecraft_potential_V is None or not np.isfinite(spacecraft_potential_V)
+            else spacecraft_potential_V
+        )
+        plt.axvline(
+            spacecraft_potential_marker_eV,
+            color="black",
+            linestyle="--",
+            linewidth=1.2,
+            label=f"LPW Vsc = {label_value:.2f} V",
+        )
+    if x_limits is not None:
+        plt.xlim(*x_limits)
     plt.xlabel("Energy (eV)")
     plt.ylabel("Differential energy flux")
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
@@ -390,9 +467,11 @@ def process_target_time(
     target_time: datetime,
     pad_file: Path,
     mag_file: Path,
+    lpw_file: Path,
     output_root: Path,
     forward_pitch_max_deg: float = 30.0,
     backward_pitch_min_deg: float = 150.0,
+    spacecraft_potential_min_flag: float = DEFAULT_SCPOT_MIN_FLAG,
 ) -> SpectrumResult:
     pad_data = load_pad_data(pad_file)
     forward_flux, backward_flux, pad_index, forward_bins, backward_bins = compute_directional_spectra(
@@ -402,6 +481,11 @@ def process_target_time(
         backward_pitch_min_deg=backward_pitch_min_deg,
     )
     magnetic_field, mag_time = nearest_mag_vector(mag_file, target_time)
+    spacecraft_potential, lpw_time, spacecraft_potential_marker_eV = nearest_spacecraft_potential(
+        lpw_file,
+        target_time,
+        min_flag=spacecraft_potential_min_flag,
+    )
     output_dir = build_output_dir(target_time, output_root)
 
     plot_path = output_dir / "directional_electron_spectra.png"
@@ -410,6 +494,8 @@ def process_target_time(
         forward_flux,
         backward_flux,
         plot_path,
+        spacecraft_potential_marker_eV=spacecraft_potential_marker_eV,
+        spacecraft_potential_V=spacecraft_potential,
         forward_pitch_max_deg=forward_pitch_max_deg,
         backward_pitch_min_deg=backward_pitch_min_deg,
     )
@@ -418,9 +504,13 @@ def process_target_time(
         target_time=target_time.isoformat(timespec="seconds"),
         swe_time=format_unix_time(pad_data["times"][pad_index]),
         mag_time=mag_time,
+        lpw_time=lpw_time,
         pad_file=str(pad_file),
         mag_file=str(mag_file),
+        lpw_file=str(lpw_file),
         magnetic_field_nT=magnetic_field.tolist(),
+        spacecraft_potential_V=float(spacecraft_potential),
+        spacecraft_potential_marker_eV=float(spacecraft_potential_marker_eV),
         forward_pitch_max_deg=float(forward_pitch_max_deg),
         backward_pitch_min_deg=float(backward_pitch_min_deg),
         energy_eV=pad_data["energy"].tolist(),
@@ -468,6 +558,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time", required=True, help="Target timestamp, for example 2024-11-07T12:00:00.")
     parser.add_argument("--pad-file", help="Path to the SWE PAD CDF file.")
     parser.add_argument("--mag-file", help="Path to the MAG STS file.")
+    parser.add_argument("--lpw-file", help="Path to the LPW mrgscpot CDF file.")
+    parser.add_argument(
+        "--spacecraft-potential-min-flag",
+        type=float,
+        default=DEFAULT_SCPOT_MIN_FLAG,
+        help="Minimum LPW mrgscpot quality flag used for spacecraft-potential samples.",
+    )
     parser.add_argument(
         "--forward-pitch-max",
         type=float,
@@ -512,14 +609,23 @@ def main() -> None:
         day=day,
         extension="sts",
     )
+    lpw_file = Path(args.lpw_file).expanduser().resolve() if args.lpw_file else infer_daily_file(
+        data_root=data_root,
+        instrument="lpw",
+        datatype_alias="mrgscpot",
+        day=day,
+        extension="cdf",
+    )
 
     result = process_target_time(
         target_time=target_time,
         pad_file=pad_file,
         mag_file=mag_file,
+        lpw_file=lpw_file,
         output_root=output_root,
         forward_pitch_max_deg=args.forward_pitch_max,
         backward_pitch_min_deg=args.backward_pitch_min,
+        spacecraft_potential_min_flag=args.spacecraft_potential_min_flag,
     )
     print(json.dumps(result.__dict__, indent=2, ensure_ascii=False))
 
