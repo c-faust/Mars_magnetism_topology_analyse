@@ -527,10 +527,11 @@
     left: "clamp(240px, 22vw, 360px)",
     right: "clamp(260px, 26vw, 420px)",
   };
-  // Fixed plotting ranges make different times easier to compare visually.
+  // Most panels keep fixed ranges; STATIC panels use per-window scaling to
+  // match the static PNG renderer.
   const FIXED_RANGES = {
-    staticEnergy: { yMode: "log", yRange: [0.1, 10000.0], colorLogRange: [3.0, 9.0] },
-    staticMass: { yMode: "linear", yRange: null, colorLogRange: [3.0, 9.0] },
+    staticEnergy: { yMode: "log", yRange: null, colorPercentiles: [2.0, 98.0], sortY: true, useCellEdges: true, fullWindowX: true },
+    staticMass: { yMode: "linear", yRange: null, colorPercentiles: [2.0, 98.0], sortY: true, useCellEdges: true, fullWindowX: true },
     swePad: {
       yMode: "linear",
       yRange: [0.0, 180.0],
@@ -780,6 +781,52 @@
       [202, 96, 62],
       [120, 22, 31],
     ]);
+  }
+  function percentile(sortedValues, q) {
+    if (!sortedValues.length) return NaN;
+    const pos = clamp(q, 0, 100) / 100 * (sortedValues.length - 1);
+    const lo = Math.floor(pos);
+    const hi = Math.ceil(pos);
+    const f = pos - lo;
+    return sortedValues[lo] + (sortedValues[hi] - sortedValues[lo]) * f;
+  }
+  function colorRangeFromValues(rawValues, colorScale, options) {
+    if (options.colorRange) return options.colorRange;
+    if (options.colorLogRange) return options.colorLogRange;
+    const values = rawValues.filter((v) => finite(v) && (colorScale === "linear" || v > 0));
+    if (!values.length) return [NaN, NaN];
+    if (options.colorPercentiles) {
+      values.sort((a, b) => a - b);
+      let rawMin = percentile(values, options.colorPercentiles[0]);
+      let rawMax = percentile(values, options.colorPercentiles[1]);
+      if (!(finite(rawMin) && rawMin > 0) && colorScale === "log") rawMin = values[0];
+      if (!(finite(rawMax) && rawMax > rawMin)) rawMax = values[values.length - 1];
+      if (!(finite(rawMax) && rawMax > rawMin)) rawMax = colorScale === "log" ? rawMin * 10 : rawMin + 1;
+      return colorScale === "log" ? [Math.log10(rawMin), Math.log10(rawMax)] : [rawMin, rawMax];
+    }
+    const scaled = colorScale === "log" ? values.map((v) => Math.log10(v)) : values;
+    return [Math.min(...scaled), Math.max(...scaled)];
+  }
+  function axisEdges(values, logScale = false) {
+    const usable = values.filter((v) => finite(v) && (!logScale || v > 0));
+    if (!usable.length) return [];
+    if (usable.length === 1) {
+      const delta = logScale ? usable[0] * 0.05 : 0.5;
+      return [usable[0] - delta, usable[0] + delta];
+    }
+    if (logScale) {
+      const logs = usable.map((v) => Math.log10(Math.max(v, 1e-12)));
+      const mids = [];
+      for (let i = 0; i < logs.length - 1; i += 1) mids.push((logs[i] + logs[i + 1]) / 2);
+      const first = logs[0] - (mids[0] - logs[0]);
+      const last = logs[logs.length - 1] + (logs[logs.length - 1] - mids[mids.length - 1]);
+      return [first, ...mids, last].map((v) => 10 ** v);
+    }
+    const mids = [];
+    for (let i = 0; i < usable.length - 1; i += 1) mids.push((usable[i] + usable[i + 1]) / 2);
+    const first = usable[0] - (mids[0] - usable[0]);
+    const last = usable[usable.length - 1] + (usable[usable.length - 1] - mids[mids.length - 1]);
+    return [first, ...mids, last];
   }
 
   function withWindow(times, centerUnix, seconds) {
@@ -1336,25 +1383,41 @@
     const pad = layout.pad;
     const colorScale = options.colorScale || "log";
     if (!matrix.length || !yValues.length || !xTimes.length) { drawNoData(c, w, h, "No data in window"); drawLegend(legendTarget, NaN, NaN, options); return; }
-    const flat = [];
+    const rawFlat = [];
     for (const row of matrix) {
       for (const v of row) {
         if (!finite(v)) continue;
         if (colorScale === "log") {
-          if (v > 0) flat.push(Math.log10(v));
+          if (v > 0) rawFlat.push(v);
         } else {
-          flat.push(v);
+          rawFlat.push(v);
         }
       }
     }
-    if (!flat.length) { drawNoData(c, w, h, "No valid flux values"); drawLegend(legendTarget, NaN, NaN, options); return; }
-    const vmin = options.colorRange ? options.colorRange[0] : (options.colorLogRange ? options.colorLogRange[0] : Math.min(...flat));
-    const vmax = options.colorRange ? options.colorRange[1] : (options.colorLogRange ? options.colorLogRange[1] : Math.max(...flat));
+    if (!rawFlat.length) { drawNoData(c, w, h, "No valid flux values"); drawLegend(legendTarget, NaN, NaN, options); return; }
+    const [vmin, vmax] = colorRangeFromValues(rawFlat, colorScale, options);
+    const centerUnix = isoToUnix(state.samples[state.selectedIndex].target_time);
+    const halfWindow = state.data.context_overview?.window_seconds || 600;
+    const xmin = options.fullWindowX ? centerUnix - halfWindow : xTimes[0];
+    const xmax = options.fullWindowX ? centerUnix + halfWindow : xTimes[xTimes.length - 1];
     const plotW = w - pad.l - pad.r, plotH = h - pad.t - pad.b;
     const cellW = plotW / Math.max(1, xTimes.length);
+    const xMap = (value) => pad.l + (value - xmin) / Math.max(1e-9, xmax - xmin) * plotW;
+    const xEdges = options.useCellEdges ? axisEdges(xTimes, false) : [];
     const yMode = options.yMode || "linear";
-    const dataYMin = Math.min(...yValues.filter(finite));
-    const dataYMax = Math.max(...yValues.filter(finite));
+    const ySorted = yValues
+      .map((value, index) => ({ value, index }))
+      .filter((item) => finite(item.value) && (yMode === "linear" || item.value > 0));
+    if (options.sortY) ySorted.sort((a, b) => a.value - b.value);
+    const validY = ySorted.map((item) => item.value);
+    if (!validY.length) {
+      drawNoData(c, w, h, "No valid axis values");
+      drawLegend(legendTarget, NaN, NaN, options);
+      return;
+    }
+    const yEdges = options.useCellEdges ? axisEdges(validY, yMode === "log") : [];
+    const dataYMin = yEdges.length ? yEdges[0] : Math.min(...validY);
+    const dataYMax = yEdges.length ? yEdges[yEdges.length - 1] : Math.max(...validY);
     const yRange = options.yRange || [dataYMin, dataYMax];
     const yLow = yRange[0];
     const yHigh = yRange[1];
@@ -1369,11 +1432,13 @@
       const t = (value - yLow) / (yHigh - yLow);
       return pad.t + (1 - t) * plotH;
     };
-    const ySorted = yValues.map((value, index) => ({ value, index })).filter((item) => finite(item.value));
+    c.save();
+    c.beginPath();
+    c.rect(pad.l, pad.t, plotW, plotH);
+    c.clip();
     for (let ix = 0; ix < xTimes.length; ix += 1) {
       for (let j = 0; j < ySorted.length; j += 1) {
         const current = ySorted[j];
-        const next = ySorted[Math.min(j + 1, ySorted.length - 1)];
         const row = matrix[ix] || [];
         const v = row[current.index];
         if (!finite(v)) continue;
@@ -1388,15 +1453,20 @@
           [202, 96, 62],
           [120, 22, 31],
         ]);
-        const x = pad.l + ix * cellW;
-        const yTop = yMap(next.value);
-        const yBottom = yMap(current.value);
-        if (yTop === null || yBottom === null) continue;
-        const top = Math.min(yTop, yBottom);
-        const height = Math.max(1, Math.abs(yBottom - yTop));
-        c.fillRect(x, top, Math.ceil(cellW) + 1, height + 1);
+        const xEdge0 = xEdges.length ? xMap(xEdges[ix]) : null;
+        const xEdge1 = xEdges.length ? xMap(xEdges[ix + 1]) : null;
+        const x = xEdges.length && xEdge0 !== null && xEdge1 !== null ? Math.min(xEdge0, xEdge1) : xMap(xTimes[ix]);
+        const width = xEdges.length && xEdge0 !== null && xEdge1 !== null ? Math.max(1, Math.abs(xEdge1 - xEdge0)) : cellW;
+        const yCenter = yMap(current.value);
+        const yEdge0 = yEdges.length ? yMap(yEdges[j]) : null;
+        const yEdge1 = yEdges.length ? yMap(yEdges[j + 1]) : null;
+        const height = yEdges.length && yEdge0 !== null && yEdge1 !== null ? Math.max(1, Math.abs(yEdge1 - yEdge0)) : plotH / Math.max(1, ySorted.length);
+        const top = yEdges.length && yEdge0 !== null && yEdge1 !== null ? Math.min(yEdge0, yEdge1) : yCenter - height / 2;
+        if (yCenter === null || !finite(top)) continue;
+        c.fillRect(x, top, Math.ceil(width) + 1, height + 1);
       }
     }
+    c.restore();
     c.strokeStyle = "#c9bcac";
     c.strokeRect(pad.l, pad.t, plotW, plotH);
     c.fillStyle = "#665c54";
@@ -1420,8 +1490,6 @@
         : tick.toFixed(0);
       c.fillText(label, 4, y + 4);
     });
-    const centerUnix = isoToUnix(state.samples[state.selectedIndex].target_time);
-    const xmin = xTimes[0], xmax = xTimes[xTimes.length - 1];
     if (xmax > xmin) {
       drawTimeMarker(c, w, h, pad, centerUnix, xmin, xmax);
       drawTimeAxisLabels(c, w, h, pad, xmin, xmax, layout);

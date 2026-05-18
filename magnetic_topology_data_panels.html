@@ -282,8 +282,8 @@
   const lineColors = { bx: "#cc4338", by: "#2674c8", bz: "#3a8a53", bmag: "#6e5b4f" };
   const MARS_RADIUS_KM = 3389.5;
   const FIXED_RANGES = {
-    staticEnergy: { yMode: "log", yRange: [0.1, 10000.0], colorLogRange: [3.0, 9.0] },
-    staticMass: { yMode: "linear", yRange: null, colorLogRange: [3.0, 9.0] },
+    staticEnergy: { yMode: "log", yRange: null, colorPercentiles: [2.0, 98.0], sortY: true, useCellEdges: true, fullWindowX: true },
+    staticMass: { yMode: "linear", yRange: null, colorPercentiles: [2.0, 98.0], sortY: true, useCellEdges: true, fullWindowX: true },
     swePad: {
       yMode: "linear",
       yRange: [0.0, 180.0],
@@ -373,6 +373,52 @@
       [202, 96, 62],
       [120, 22, 31],
     ]);
+  }
+  function percentile(sortedValues, q) {
+    if (!sortedValues.length) return NaN;
+    const pos = clamp(q, 0, 100) / 100 * (sortedValues.length - 1);
+    const lo = Math.floor(pos);
+    const hi = Math.ceil(pos);
+    const f = pos - lo;
+    return sortedValues[lo] + (sortedValues[hi] - sortedValues[lo]) * f;
+  }
+  function colorRangeFromValues(rawValues, colorScale, options) {
+    if (options.colorRange) return options.colorRange;
+    if (options.colorLogRange) return options.colorLogRange;
+    const values = rawValues.filter((v) => finite(v) && (colorScale === "linear" || v > 0));
+    if (!values.length) return [NaN, NaN];
+    if (options.colorPercentiles) {
+      values.sort((a, b) => a - b);
+      let rawMin = percentile(values, options.colorPercentiles[0]);
+      let rawMax = percentile(values, options.colorPercentiles[1]);
+      if (!(finite(rawMin) && rawMin > 0) && colorScale === "log") rawMin = values[0];
+      if (!(finite(rawMax) && rawMax > rawMin)) rawMax = values[values.length - 1];
+      if (!(finite(rawMax) && rawMax > rawMin)) rawMax = colorScale === "log" ? rawMin * 10 : rawMin + 1;
+      return colorScale === "log" ? [Math.log10(rawMin), Math.log10(rawMax)] : [rawMin, rawMax];
+    }
+    const scaled = colorScale === "log" ? values.map((v) => Math.log10(v)) : values;
+    return [Math.min(...scaled), Math.max(...scaled)];
+  }
+  function axisEdges(values, logScale = false) {
+    const usable = values.filter((v) => finite(v) && (!logScale || v > 0));
+    if (!usable.length) return [];
+    if (usable.length === 1) {
+      const delta = logScale ? usable[0] * 0.05 : 0.5;
+      return [usable[0] - delta, usable[0] + delta];
+    }
+    if (logScale) {
+      const logs = usable.map((v) => Math.log10(Math.max(v, 1e-12)));
+      const mids = [];
+      for (let i = 0; i < logs.length - 1; i += 1) mids.push((logs[i] + logs[i + 1]) / 2);
+      const first = logs[0] - (mids[0] - logs[0]);
+      const last = logs[logs.length - 1] + (logs[logs.length - 1] - mids[mids.length - 1]);
+      return [first, ...mids, last].map((v) => 10 ** v);
+    }
+    const mids = [];
+    for (let i = 0; i < usable.length - 1; i += 1) mids.push((usable[i] + usable[i + 1]) / 2);
+    const first = usable[0] - (mids[0] - usable[0]);
+    const last = usable[usable.length - 1] + (usable[usable.length - 1] - mids[mids.length - 1]);
+    return [first, ...mids, last];
   }
   function withWindow(times, centerUnix, seconds) {
     const start = centerUnix - seconds;
@@ -570,19 +616,30 @@
       drawLegend(legendTarget, NaN, NaN, options);
       return;
     }
-    const flat = matrix.flat().filter((v) => finite(v) && (colorScale === "linear" || v > 0));
-    if (!flat.length) {
+    const rawFlat = matrix.flat().filter((v) => finite(v) && (colorScale === "linear" || v > 0));
+    if (!rawFlat.length) {
       drawNoData(c, w, h, "No valid flux values");
       drawLegend(legendTarget, NaN, NaN, options);
       return;
     }
-    const scaledVals = colorScale === "log" ? flat.map((v) => Math.log10(v)) : flat;
-    const vmin = options.colorRange ? options.colorRange[0] : (options.colorLogRange ? options.colorLogRange[0] : Math.min(...scaledVals));
-    const vmax = options.colorRange ? options.colorRange[1] : (options.colorLogRange ? options.colorLogRange[1] : Math.max(...scaledVals));
-    const x0 = xTimes[0], x1 = xTimes[xTimes.length - 1];
-    const validY = yValues.filter((v) => finite(v) && (yMode === "linear" || v > 0));
-    const yLow = options.yRange ? options.yRange[0] : Math.min(...validY);
-    const yHigh = options.yRange ? options.yRange[1] : Math.max(...validY);
+    const [vmin, vmax] = colorRangeFromValues(rawFlat, colorScale, options);
+    const centerUnix = isoToUnix(state.samples[state.selectedIndex]?.target_time || "");
+    const halfWindow = state.data?.context_overview?.window_seconds || 600;
+    const x0 = options.fullWindowX && finite(centerUnix) ? centerUnix - halfWindow : xTimes[0];
+    const x1 = options.fullWindowX && finite(centerUnix) ? centerUnix + halfWindow : xTimes[xTimes.length - 1];
+    const yItems = yValues
+      .map((value, index) => ({ value, index }))
+      .filter((item) => finite(item.value) && (yMode === "linear" || item.value > 0));
+    if (options.sortY) yItems.sort((a, b) => a.value - b.value);
+    const validY = yItems.map((item) => item.value);
+    if (!validY.length) {
+      drawNoData(c, w, h, "No valid axis values");
+      drawLegend(legendTarget, NaN, NaN, options);
+      return;
+    }
+    const yEdges = options.useCellEdges ? axisEdges(validY, yMode === "log") : [];
+    const yLow = options.yRange ? options.yRange[0] : (yEdges.length ? yEdges[0] : Math.min(...validY));
+    const yHigh = options.yRange ? options.yRange[1] : (yEdges.length ? yEdges[yEdges.length - 1] : Math.max(...validY));
     const plotW = w - pad.l - pad.r;
     const plotH = h - pad.t - pad.b;
     const xMap = (v) => pad.l + (v - x0) / Math.max(1e-9, x1 - x0) * plotW;
@@ -596,17 +653,29 @@
       return pad.t + (1 - t) * plotH;
     };
     const cellW = plotW / Math.max(1, xTimes.length);
-    const cellH = plotH / Math.max(1, yValues.length);
+    const xEdges = options.useCellEdges ? axisEdges(xTimes, false) : [];
+    c.save();
+    c.beginPath();
+    c.rect(pad.l, pad.t, plotW, plotH);
+    c.clip();
     for (let xi = 0; xi < xTimes.length; xi += 1) {
-      for (let yi = 0; yi < yValues.length; yi += 1) {
-        const value = matrix[xi]?.[yi];
+      for (let yi = 0; yi < yItems.length; yi += 1) {
+        const item = yItems[yi];
+        const value = matrix[xi]?.[item.index];
         if (!finite(value)) continue;
         if (colorScale === "log" && !(value > 0)) continue;
         const scaledValue = colorScale === "log" ? Math.log10(value) : value;
         const t = (scaledValue - vmin) / Math.max(1e-9, vmax - vmin);
-        const px = xMap(xTimes[xi]);
-        const py = yMap(yValues[yi]);
-        if (py === null) continue;
+        const xEdge0 = xEdges.length ? xMap(xEdges[xi]) : null;
+        const xEdge1 = xEdges.length ? xMap(xEdges[xi + 1]) : null;
+        const px = xEdges.length && xEdge0 !== null && xEdge1 !== null ? Math.min(xEdge0, xEdge1) : xMap(xTimes[xi]);
+        const width = xEdges.length && xEdge0 !== null && xEdge1 !== null ? Math.max(1, Math.abs(xEdge1 - xEdge0)) : cellW;
+        const py = yMap(item.value);
+        const yEdge0 = yEdges.length ? yMap(yEdges[yi]) : null;
+        const yEdge1 = yEdges.length ? yMap(yEdges[yi + 1]) : null;
+        const cellH = yEdges.length && yEdge0 !== null && yEdge1 !== null ? Math.max(1, Math.abs(yEdge1 - yEdge0)) : plotH / Math.max(1, yItems.length);
+        const top = yEdges.length && yEdge0 !== null && yEdge1 !== null ? Math.min(yEdge0, yEdge1) : py - cellH;
+        if (py === null || !finite(top)) continue;
         c.fillStyle = colorFromStops(t, options.paletteStops || [
           [10, 26, 68],
           [31, 92, 143],
@@ -616,9 +685,10 @@
           [202, 96, 62],
           [120, 22, 31],
         ]);
-        c.fillRect(px, py - cellH, cellW + 1, cellH + 1);
+        c.fillRect(px, top, width + 1, cellH + 1);
       }
     }
+    c.restore();
     c.strokeStyle = "#c9bcac";
     c.lineWidth = 1;
     c.strokeRect(pad.l, pad.t, plotW, plotH);
@@ -643,6 +713,7 @@
       c.fillText(label, 4, y + 4);
     });
     drawTimeAxisLabels(c, w, h, pad, x0, x1, layout);
+    if (finite(centerUnix) && x1 > x0) drawTimeMarker(c, h, pad, centerUnix, x0, x1, w);
     drawLegend(legendTarget, vmin, vmax, options);
   }
   function drawSpectrumPlot(canvasTarget, energy, forwardFlux, backwardFlux, options = {}) {

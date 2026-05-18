@@ -1,5 +1,26 @@
 # README
 
+## Daily orbit panel figures
+
+New standalone script:
+
+- `plot_maven_daily_orbit_panels.py`
+  - Input one UTC day and create one long PNG for each complete periapsis-to-periapsis orbit in that day.
+  - Panels: STATIC ion energy, STATIC ion mass, SWEA electron energy, SWEA pitch angle averaged over 20-80 eV by default, MAG Bx/By/Bz/|B|, altitude, and bottom annotations for UTC time, MSO XYZ in R_M, planetocentric lon/lat, and altitude.
+  - Output defaults to `outputs/maven_daily_orbit_panels/<YYYYMMDD>/`.
+
+Example:
+
+```bash
+python plot_maven_daily_orbit_panels.py --day 2024-11-07 --no-auto-download
+```
+
+The pitch-angle energy band is configurable:
+
+```bash
+python plot_maven_daily_orbit_panels.py --day 2024-11-07 --electron-pad-band 20 80
+```
+
 ## Machine-learning electron spectra workspace
 
 New standalone folder:

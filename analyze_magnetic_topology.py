@@ -60,8 +60,8 @@ CONFIG = {
 # Topology criteria are centralized here so the rules are explicit and easy to adjust.
 TOPOLOGY_RULES = {
     "pitch_angle": {
-        "parallel_max_deg": 60.0,
-        "anti_parallel_min_deg": 120.0,
+        "parallel_max_deg": 30.0,
+        "anti_parallel_min_deg": 150.0,
     },
     "knee": {
         "pre_band_eV": (30.0, 55.0),
