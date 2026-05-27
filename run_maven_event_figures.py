@@ -166,7 +166,7 @@ def build_panel_summary_without_topology(
     )
 
 
-def resolve_lpw_mrgscpot_file(target_time: datetime, data_root: Path, auto_download: bool) -> Path:
+def resolve_lpw_mrgscpot_file(target_time: datetime, data_root: Path, auto_download: bool) -> Path | None:
     try:
         return infer_daily_file(
             data_root=data_root,
@@ -175,19 +175,25 @@ def resolve_lpw_mrgscpot_file(target_time: datetime, data_root: Path, auto_downl
             day=target_time,
             extension="cdf",
         )
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
         if not auto_download:
-            raise
+            log_step(f"LPW mrgscpot unavailable locally: {exc}")
+            return None
 
     specs = [spec for spec in PIPELINE_PRODUCTS if spec.instrument == "lpw" and spec.datatype == "mrgscpot"]
     if not specs:
         raise RuntimeError("No LPW mrgscpot product specification is available for auto-download.")
-    return download_product_for_day(
-        session=build_session(),
-        spec=specs[0],
-        day=target_time.date(),
-        data_root=data_root,
-    )
+    try:
+        return download_product_for_day(
+            session=build_session(),
+            spec=specs[0],
+            day=target_time.date(),
+            data_root=data_root,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        log_step(f"LPW mrgscpot download/resolve failed: {exc}")
+        log_step("Continuing without LPW spacecraft-potential marker.")
+        return None
 
 
 def main() -> None:
@@ -229,7 +235,7 @@ def main() -> None:
         auto_download=cfg["auto_download_missing_data"],
     )
     for key, path in target_files.items():
-        log_step(f"Resolved input file [{key}]: {path}")
+        log_step(f"Resolved input file [{key}]: {path if path is not None else 'not available'}")
 
     log_step("Generating directional electron spectrum.")
     spectrum = process_target_time(
@@ -296,7 +302,7 @@ def main() -> None:
                 "model_max_degree": cfg["model_max_degree"],
                 "auto_download_missing_data": cfg["auto_download_missing_data"],
             },
-            "input_files": {key: str(value) for key, value in target_files.items()},
+            "input_files": {key: str(value) if value is not None else None for key, value in target_files.items()},
             "outputs": {
                 "event_dir": str(event_dir),
                 "spectrum_summary": str(event_dir / "spectra" / target_time.strftime("%Y%m%dT%H%M%S") / "spectrum_summary.json"),

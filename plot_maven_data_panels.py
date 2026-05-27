@@ -3,13 +3,13 @@ from __future__ import annotations
 Render the magnetic-topology data panels as a static PNG.
 
 This is the Python counterpart of `magnetic_topology_data_panels.html`: it reads
-`topology_summary.json`, picks a target time, and draws the same science context
-panels around that time.
+either a `topology_summary.json`-shaped dictionary or the local MAVEN daily data,
+picks a target time, and draws the same science context panels around that time.
 """
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import matplotlib
@@ -19,14 +19,29 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LogNorm
 
-from analyze_magnetic_topology import load_static_context
+from analyze_magnetic_topology import (
+    build_mag_context,
+    derive_pitch_bins,
+    iter_days,
+    load_mag_day,
+    load_static_context,
+    resolve_daily_files,
+    select_time_indices,
+)
 from download_maven_data import DEFAULT_DATA_ROOT, parse_iso_timestamp
+from process_maven_spectra import load_pad_data
 
 
 MARS_RADIUS_KM = 3389.5
 LINE_COLORS = {"bx": "#cc4338", "by": "#2674c8", "bz": "#3a8a53", "bmag": "#6e5b4f"}
 PAD_CMAP = "turbo"
 FLUX_CMAP = "magma"
+DEFAULT_OUTPUT_ROOT = Path("outputs") / "maven_data_panels"
+DEFAULT_PAD_ENERGY_BAND_EV = (111.0, 140.0)
+
+
+def log_step(message: str) -> None:
+    print(f"[data-panels] {datetime.now().isoformat(timespec='seconds')} | {message}", flush=True)
 
 
 def unix_to_matplotlib_dates(values: np.ndarray) -> np.ndarray:
@@ -43,9 +58,187 @@ def finite_array(values) -> np.ndarray:
 
 def nearest_sample_index(samples: list[dict], target_time: datetime) -> int:
     if not samples:
-        raise ValueError("topology_summary.json does not contain any samples.")
+        raise ValueError("The data-panel summary does not contain any samples.")
     sample_times = np.asarray([iso_to_unix(sample["target_time"]) for sample in samples], dtype=float)
     return int(np.argmin(np.abs(sample_times - target_time.timestamp())))
+
+
+def validate_energy_band(energy_band_eV: tuple[float, float]) -> tuple[float, float]:
+    low, high = (float(energy_band_eV[0]), float(energy_band_eV[1]))
+    if low <= 0.0 or high <= 0.0 or low >= high:
+        raise ValueError("pad-energy-band must satisfy 0 < LOW_EV < HIGH_EV.")
+    return low, high
+
+
+def energy_band_label(energy_band_eV: tuple[float, float]) -> str:
+    low, high = validate_energy_band(energy_band_eV)
+    return f"{low:g}-{high:g} eV"
+
+
+def default_pad_energy_band(energy: np.ndarray, requested_band_eV: tuple[float, float]) -> tuple[float, float]:
+    low, high = validate_energy_band(requested_band_eV)
+    band_mask = (energy >= low) & (energy <= high)
+    if np.any(band_mask):
+        return low, high
+    fallback = (100.0, 150.0)
+    fallback_mask = (energy >= fallback[0]) & (energy <= fallback[1])
+    if np.any(fallback_mask):
+        return fallback
+    raise ValueError(
+        f"No SWE energy bins were found in {energy_band_label((low, high))} "
+        f"or fallback {energy_band_label(fallback)}."
+    )
+
+
+def build_swe_context_for_band(
+    pad_data: dict,
+    start: datetime,
+    end: datetime,
+    pad_energy_band_eV: tuple[float, float] = DEFAULT_PAD_ENERGY_BAND_EV,
+) -> dict | None:
+    times = np.asarray(pad_data["times"], dtype=float)
+    time_mask = (times >= start.timestamp()) & (times <= end.timestamp())
+    if not np.any(time_mask):
+        return None
+
+    indices = np.where(time_mask)[0]
+    flux = np.asarray(pad_data["flux"], dtype=float)[indices]
+    energy = np.asarray(pad_data["energy"], dtype=float)
+    actual_band_eV = default_pad_energy_band(energy, pad_energy_band_eV)
+    band_mask_energy = (energy >= actual_band_eV[0]) & (energy <= actual_band_eV[1])
+
+    omni_spectrum = np.nanmean(flux, axis=1)
+    band_flux = flux[:, :, band_mask_energy]
+    valid_counts = np.sum(np.isfinite(band_flux), axis=2)
+    band_sum = np.nansum(band_flux, axis=2)
+    pad_band = np.divide(
+        band_sum,
+        valid_counts,
+        out=np.full_like(band_sum, np.nan, dtype=float),
+        where=valid_counts > 0,
+    )
+    pitch_bins = derive_pitch_bins(pad_data, indices, band_mask_energy)
+    context = {
+        "times_unix": times[indices].tolist(),
+        "energy_eV": energy.tolist(),
+        "pitch_deg": np.asarray(pitch_bins, dtype=float).tolist(),
+        "omni_eflux": omni_spectrum.tolist(),
+        "pad_eflux": pad_band.tolist(),
+        "pad_energy_band_eV": list(actual_band_eV),
+    }
+    if actual_band_eV == DEFAULT_PAD_ENERGY_BAND_EV:
+        context["pad_111_140_eflux"] = pad_band.tolist()
+    return context
+
+
+def concat_timeseries(parts: list[dict], keys: list[str]) -> dict | None:
+    if not parts:
+        return None
+    merged: dict[str, list] = {key: [] for key in keys}
+    static_keys = [key for key in parts[0].keys() if key not in merged]
+    for part in parts:
+        for key in keys:
+            merged[key].extend(part[key])
+    for key in static_keys:
+        merged[key] = parts[0][key]
+    return merged
+
+
+def sample_altitude_entries(
+    mag_data_ss: dict,
+    start: datetime,
+    end: datetime,
+    step_seconds: int,
+) -> list[dict]:
+    times = np.asarray(mag_data_ss["times"], dtype=float)
+    samples: list[dict] = []
+    for index in select_time_indices(times, start, end, step_seconds):
+        sample_time = datetime.fromtimestamp(float(times[index]), tz=timezone.utc)
+        position_km = np.asarray(mag_data_ss["data"][index, mag_data_ss["pos_indices"]], dtype=float)
+        altitude_km = float(np.linalg.norm(position_km) - MARS_RADIUS_KM)
+        samples.append(
+            {
+                "target_time": sample_time.isoformat(timespec="seconds"),
+                "topology": "not_computed",
+                "altitude_km": altitude_km,
+                "altitude_rm": altitude_km / MARS_RADIUS_KM,
+                "position_km": position_km.tolist(),
+                "position_rm": (position_km / MARS_RADIUS_KM).tolist(),
+            }
+        )
+    return samples
+
+
+def build_data_panel_summary_from_data(
+    target_time: datetime,
+    window_minutes: float,
+    step_seconds: int,
+    data_root: Path = DEFAULT_DATA_ROOT,
+    auto_download_missing_data: bool = False,
+    pad_energy_band_eV: tuple[float, float] = DEFAULT_PAD_ENERGY_BAND_EV,
+) -> dict:
+    if window_minutes <= 0:
+        raise ValueError("window-minutes must be positive.")
+    if step_seconds <= 0:
+        raise ValueError("step-seconds must be positive.")
+
+    half_window = timedelta(minutes=window_minutes / 2.0)
+    start = target_time - half_window
+    end = target_time + half_window
+    resolved_files = resolve_daily_files(
+        start=start,
+        end=end,
+        data_root=data_root,
+        pad_file=None,
+        mag_file=None,
+        auto_download_missing_data=auto_download_missing_data,
+    )
+
+    static_parts: list[dict] = []
+    swe_parts: list[dict] = []
+    mag_parts: list[dict] = []
+    samples: list[dict] = []
+    input_files: dict[str, dict[str, str]] = {}
+
+    for day in iter_days(start, end):
+        files = resolved_files[day]
+        input_files[day.isoformat()] = {key: str(path) for key, path in files.items()}
+        day_start = max(start, datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc))
+        day_end = min(end, datetime.combine(day, datetime.max.time(), tzinfo=timezone.utc))
+
+        pad_data = load_pad_data(files["pad"])
+        swe_context = build_swe_context_for_band(pad_data, day_start, day_end, pad_energy_band_eV)
+        if swe_context:
+            swe_parts.append(swe_context)
+
+        mag_data_ss = load_mag_day(files["mag_ss"])
+        mag_context = build_mag_context(mag_data_ss, day_start, day_end)
+        if mag_context:
+            mag_parts.append(mag_context)
+        samples.extend(sample_altitude_entries(mag_data_ss, day_start, day_end, step_seconds))
+
+        static_context = load_static_context(files["sta_c6"], day_start, day_end)
+        if static_context:
+            static_parts.append(static_context)
+
+    if not samples:
+        raise ValueError("No MAG samples were found in the requested event window.")
+
+    return {
+        "start_time": start.isoformat(timespec="seconds"),
+        "end_time": end.isoformat(timespec="seconds"),
+        "step_seconds": step_seconds,
+        "topology_computed": False,
+        "source": "local_data",
+        "input_files": input_files,
+        "context_overview": {
+            "window_seconds": window_minutes * 60.0,
+            "static": concat_timeseries(static_parts, ["times_unix", "energy_eflux", "mass_eflux"]),
+            "mag": concat_timeseries(mag_parts, ["times_unix", "bx_nT", "by_nT", "bz_nT", "bmag_nT"]),
+            "swe": concat_timeseries(swe_parts, ["times_unix", "omni_eflux", "pad_eflux"]),
+        },
+        "samples": samples,
+    }
 
 
 def window_indices(times_unix, center_unix: float, window_seconds: float) -> np.ndarray:
@@ -135,6 +328,18 @@ def sample_altitude_km(sample: dict) -> float:
     return float("nan")
 
 
+def resolve_pad_panel_data(
+    swe: dict,
+    requested_band_eV: tuple[float, float] = DEFAULT_PAD_ENERGY_BAND_EV,
+) -> tuple[np.ndarray, tuple[float, float]]:
+    if "pad_eflux" in swe:
+        band = swe.get("pad_energy_band_eV") or requested_band_eV
+        return np.asarray(swe.get("pad_eflux", []), dtype=float), validate_energy_band(tuple(band))
+    if "pad_111_140_eflux" in swe:
+        return np.asarray(swe.get("pad_111_140_eflux", []), dtype=float), DEFAULT_PAD_ENERGY_BAND_EV
+    return np.asarray([], dtype=float), validate_energy_band(requested_band_eV)
+
+
 def plot_heatmap(
     ax,
     matrix,
@@ -201,6 +406,7 @@ def plot_data_panels(
     target_time: datetime,
     output_path: Path,
     window_minutes: float = 20.0,
+    pad_energy_band_eV: tuple[float, float] = DEFAULT_PAD_ENERGY_BAND_EV,
 ) -> dict:
     samples = summary.get("samples", [])
     selected_index = nearest_sample_index(samples, target_time)
@@ -303,15 +509,16 @@ def plot_data_panels(
         "km",
     )
 
-    pad_matrix = np.asarray(swe.get("pad_111_140_eflux", []), dtype=float)[swe_indices] if len(swe_indices) else []
+    pad_all, resolved_pad_band_eV = resolve_pad_panel_data(swe, pad_energy_band_eV)
+    pad_matrix = pad_all[swe_indices] if len(swe_indices) and pad_all.size else []
     mesh = plot_heatmap(
         axes_flat[6],
         pad_matrix,
         swe_times,
         swe.get("pitch_deg", []),
-        "SWE PAD (111-140 eV)",
+        f"SWE PAD ({energy_band_label(resolved_pad_band_eV)})",
         "Pitch angle (deg)",
-        norm=LogNorm(vmin=1e3, vmax=1e9),
+        norm=positive_log_norm(pad_matrix),
         cmap=PAD_CMAP,
     )
     if mesh:
@@ -344,27 +551,79 @@ def plot_data_panels(
     return {
         "selected_index": selected_index,
         "selected_time": selected.get("target_time"),
+        "pad_energy_band_eV": list(resolved_pad_band_eV),
         "output_path": str(output_path),
     }
 
 
+def default_event_output_path(output_root: Path, target_time: datetime) -> Path:
+    return output_root / target_time.strftime("%Y%m%dT%H%M%S") / "maven_data_panels.png"
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Render data panels from topology_summary.json.")
-    parser.add_argument("--summary-json", required=True, help="Path to topology_summary.json.")
+    parser = argparse.ArgumentParser(description="Render MAVEN data panels for one event time.")
+    parser.add_argument(
+        "--summary-json",
+        help="Optional path to topology_summary.json or data_panel_context_summary.json. If omitted, local data files are used directly.",
+    )
     parser.add_argument("--time", required=True, help="UTC target time.")
     parser.add_argument("--window-minutes", type=float, default=20.0)
-    parser.add_argument("--output", default=str(Path("outputs") / "maven_data_panels.png"))
+    parser.add_argument("--step-seconds", type=int, default=60, help="Cadence for altitude samples when reading local data.")
+    parser.add_argument(
+        "--pad-energy-band",
+        nargs=2,
+        type=float,
+        default=DEFAULT_PAD_ENERGY_BAND_EV,
+        metavar=("LOW_EV", "HIGH_EV"),
+        help="Electron energy band averaged into the SWE PAD panel.",
+    )
+    parser.add_argument("--data-root", default=str(DEFAULT_DATA_ROOT), help="Root directory for local MAVEN data.")
+    parser.add_argument(
+        "--auto-download",
+        action="store_true",
+        help="Download missing SWE/STATIC/MAG daily files. By default only local files are used.",
+    )
+    parser.add_argument(
+        "--output-root",
+        default=str(DEFAULT_OUTPUT_ROOT),
+        help="Root directory used for per-event output folders when --output is not supplied.",
+    )
+    parser.add_argument("--output", help="Explicit PNG output path. Overrides --output-root.")
     return parser
 
 
 def main() -> None:
     args = build_argument_parser().parse_args()
-    summary = json.loads(Path(args.summary_json).read_text(encoding="utf-8"))
+    target_time = parse_iso_timestamp(args.time)
+    pad_energy_band_eV = validate_energy_band(tuple(args.pad_energy_band))
+    if args.summary_json:
+        summary_path = Path(args.summary_json).expanduser().resolve()
+        log_step(f"Loading summary context: {summary_path}")
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    else:
+        data_root = Path(args.data_root).expanduser().resolve()
+        log_step(f"Building panel context directly from local data: {data_root}")
+        summary = build_data_panel_summary_from_data(
+            target_time=target_time,
+            window_minutes=args.window_minutes,
+            step_seconds=args.step_seconds,
+            data_root=data_root,
+            auto_download_missing_data=args.auto_download,
+            pad_energy_band_eV=pad_energy_band_eV,
+        )
+
+    output_path = (
+        Path(args.output).expanduser().resolve()
+        if args.output
+        else default_event_output_path(Path(args.output_root).expanduser().resolve(), target_time)
+    )
+    log_step(f"Writing data panels to: {output_path}")
     result = plot_data_panels(
         summary=summary,
-        target_time=parse_iso_timestamp(args.time),
-        output_path=Path(args.output).expanduser().resolve(),
+        target_time=target_time,
+        output_path=output_path,
         window_minutes=args.window_minutes,
+        pad_energy_band_eV=pad_energy_band_eV,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
 

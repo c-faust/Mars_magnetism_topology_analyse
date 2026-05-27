@@ -309,18 +309,36 @@ python plot_maven_orbit_map.py --precompute-crustal-cache --crustal-altitude-km 
 #### [plot_maven_data_panels.py](/g:/本研/科学/MARS/ML/maven_code_linux/plot_maven_data_panels.py)
 
 作用：
-- 从 `topology_summary.json` 渲染静态数据面板 PNG
+- 默认直接从 `data/maven` 中的本地 MAVEN 数据渲染静态数据面板 PNG，不需要先生成 `topology_summary.json`
+- 仍兼容 `--summary-json`，可继续从 `topology_summary.json` 或 `data_panel_context_summary.json` 渲染
 - 面板采用单列纵向布局，便于上下对比同一时间窗口内的不同物理量
 - 前 8 个时间相关面板共享同一 x 轴范围
 - 每个时间相关面板用黑色竖虚线标记传入的 target time
 
 运行方式：
 ```bash
+python plot_maven_data_panels.py --time 2024-11-07T02:15:00 --window-minutes 20 --step-seconds 60
+```
+
+指定 SWE PAD 能段：
+```bash
+python plot_maven_data_panels.py --time 2024-11-07T02:15:00 --window-minutes 20 --step-seconds 60 --pad-energy-band 20 80
+```
+
+兼容旧的 summary 输入：
+```bash
 python plot_maven_data_panels.py --summary-json outputs/magnetic_topology/20241107T020000_20241107T030000/topology_summary.json --time 2024-11-07T02:15:00 --window-minutes 20
 ```
 
 输出：
-- `outputs/maven_data_panels.png`
+- 默认输出到 `outputs/maven_data_panels/<timestamp>/maven_data_panels.png`
+- 例如 `outputs/maven_data_panels/20241107T021500/maven_data_panels.png`
+
+说明：
+- 直接从 `data/maven` 绘图时读取 `SWE svypad`、`STATIC c6-32e64m`、`MAG ss1s` 本地日文件
+- `--pad-energy-band LOW_EV HIGH_EV` 控制 SWE PAD 面板按哪个电子能段平均，默认是 `111 140`
+- 默认不会自动下载缺失数据；只有显式添加 `--auto-download` 才会补下载缺失的 SWE/STATIC/MAG 文件
+- 可用 `--data-root` 指定其他 MAVEN 数据目录，或用 `--output-root` / `--output` 改变输出位置
 
 #### [run_maven_event_figures.py](/g:/本研/科学/MARS/ML/maven_code_linux/run_maven_event_figures.py)
 

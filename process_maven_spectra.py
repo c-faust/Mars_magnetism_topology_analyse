@@ -41,13 +41,13 @@ class SpectrumResult:
     target_time: str
     swe_time: str
     mag_time: str
-    lpw_time: str
+    lpw_time: str | None
     pad_file: str
     mag_file: str
-    lpw_file: str
+    lpw_file: str | None
     magnetic_field_nT: list[float]
-    spacecraft_potential_V: float
-    spacecraft_potential_marker_eV: float
+    spacecraft_potential_V: float | None
+    spacecraft_potential_marker_eV: float | None
     forward_pitch_max_deg: float
     backward_pitch_min_deg: float
     energy_eV: list[float]
@@ -289,12 +289,17 @@ def compute_directional_spectra(
     if pitch.ndim == 1:
         forward_mask = pitch < forward_pitch_max_deg
         backward_mask = pitch > backward_pitch_min_deg
-        if not np.any(forward_mask):
-            raise ValueError(f"No pitch-angle bins satisfy pitch < {forward_pitch_max_deg:g} degrees.")
-        if not np.any(backward_mask):
-            raise ValueError(f"No pitch-angle bins satisfy pitch > {backward_pitch_min_deg:g} degrees.")
-        forward_flux = np.nanmean(flux_at_time[forward_mask, :], axis=0)
-        backward_flux = np.nanmean(flux_at_time[backward_mask, :], axis=0)
+        if not np.any(forward_mask) and not np.any(backward_mask):
+            raise ValueError(
+                "No pitch-angle bins satisfy either directional loss-cone selection "
+                f"(pitch < {forward_pitch_max_deg:g} degrees or pitch > {backward_pitch_min_deg:g} degrees)."
+            )
+        forward_flux = np.full(flux_at_time.shape[1], np.nan, dtype=float)
+        backward_flux = np.full(flux_at_time.shape[1], np.nan, dtype=float)
+        if np.any(forward_mask):
+            forward_flux = np.nanmean(flux_at_time[forward_mask, :], axis=0)
+        if np.any(backward_mask):
+            backward_flux = np.nanmean(flux_at_time[backward_mask, :], axis=0)
         return forward_flux, backward_flux, time_index, pitch[forward_mask], pitch[backward_mask]
 
     pitch_at_time = pitch[time_index]
@@ -313,10 +318,11 @@ def compute_directional_spectra(
             backward_flux[energy_index] = np.nanmean(flux_at_time[backward_mask, energy_index])
             backward_bins.extend(pitch_column[backward_mask].tolist())
 
-    if np.all(np.isnan(forward_flux)):
-        raise ValueError(f"No pitch-angle bins satisfy pitch < {forward_pitch_max_deg:g} degrees.")
-    if np.all(np.isnan(backward_flux)):
-        raise ValueError(f"No pitch-angle bins satisfy pitch > {backward_pitch_min_deg:g} degrees.")
+    if np.all(np.isnan(forward_flux)) and np.all(np.isnan(backward_flux)):
+        raise ValueError(
+            "No pitch-angle bins satisfy either directional loss-cone selection "
+            f"(pitch < {forward_pitch_max_deg:g} degrees or pitch > {backward_pitch_min_deg:g} degrees)."
+        )
 
     return (
         forward_flux,
@@ -392,6 +398,22 @@ def nearest_spacecraft_potential(
     return potential, format_unix_time(float(lpw_data["times"][index])), marker_eV
 
 
+def optional_nearest_spacecraft_potential(
+    path: Path | None,
+    target_time: datetime,
+    min_flag: float = DEFAULT_SCPOT_MIN_FLAG,
+) -> tuple[float | None, str | None, float | None]:
+    if path is None:
+        print("[spectra] LPW spacecraft-potential file was not found; continuing without Vsc marker.", flush=True)
+        return None, None, None
+    try:
+        return nearest_spacecraft_potential(path, target_time, min_flag=min_flag)
+    except (FileNotFoundError, OSError, KeyError, ValueError) as exc:
+        print(f"[spectra] LPW spacecraft-potential data unavailable in {path.name}: {exc}", flush=True)
+        print("[spectra] Continuing without Vsc marker.", flush=True)
+        return None, None, None
+
+
 def build_output_dir(target_time: datetime, output_root: Path) -> Path:
     directory = output_root / target_time.strftime("%Y%m%dT%H%M%S")
     directory.mkdir(parents=True, exist_ok=True)
@@ -419,22 +441,24 @@ def plot_spectra(
     x_limits = (float(np.nanmin(positive_energy)), float(np.nanmax(positive_energy))) if positive_energy.size else None
 
     plt.figure(figsize=(8, 5))
-    plt.loglog(
-        energy,
-        forward_flux,
-        marker="o",
-        markersize=3,
-        linewidth=1.2,
-        label=f"Parallel, pitch < {forward_pitch_max_deg:g} deg",
-    )
-    plt.loglog(
-        energy,
-        backward_flux,
-        marker="s",
-        markersize=3,
-        linewidth=1.2,
-        label=f"Anti-parallel, pitch > {backward_pitch_min_deg:g} deg",
-    )
+    if np.any(np.isfinite(forward_flux)):
+        plt.loglog(
+            energy,
+            forward_flux,
+            marker="o",
+            markersize=3,
+            linewidth=1.2,
+            label=f"Parallel, pitch < {forward_pitch_max_deg:g} deg",
+        )
+    if np.any(np.isfinite(backward_flux)):
+        plt.loglog(
+            energy,
+            backward_flux,
+            marker="s",
+            markersize=3,
+            linewidth=1.2,
+            label=f"Anti-parallel, pitch > {backward_pitch_min_deg:g} deg",
+        )
     if (
         spacecraft_potential_marker_eV is not None
         and np.isfinite(spacecraft_potential_marker_eV)
@@ -457,7 +481,8 @@ def plot_spectra(
     plt.xlabel("Energy (eV)")
     plt.ylabel("Differential energy flux")
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
-    plt.legend()
+    if plt.gca().get_legend_handles_labels()[0]:
+        plt.legend()
     plt.tight_layout()
     plt.savefig(output_path, dpi=180)
     plt.close()
@@ -467,7 +492,7 @@ def process_target_time(
     target_time: datetime,
     pad_file: Path,
     mag_file: Path,
-    lpw_file: Path,
+    lpw_file: Path | None,
     output_root: Path,
     forward_pitch_max_deg: float = 30.0,
     backward_pitch_min_deg: float = 150.0,
@@ -481,7 +506,7 @@ def process_target_time(
         backward_pitch_min_deg=backward_pitch_min_deg,
     )
     magnetic_field, mag_time = nearest_mag_vector(mag_file, target_time)
-    spacecraft_potential, lpw_time, spacecraft_potential_marker_eV = nearest_spacecraft_potential(
+    spacecraft_potential, lpw_time, spacecraft_potential_marker_eV = optional_nearest_spacecraft_potential(
         lpw_file,
         target_time,
         min_flag=spacecraft_potential_min_flag,
@@ -507,10 +532,12 @@ def process_target_time(
         lpw_time=lpw_time,
         pad_file=str(pad_file),
         mag_file=str(mag_file),
-        lpw_file=str(lpw_file),
+        lpw_file=str(lpw_file) if lpw_file is not None else None,
         magnetic_field_nT=magnetic_field.tolist(),
-        spacecraft_potential_V=float(spacecraft_potential),
-        spacecraft_potential_marker_eV=float(spacecraft_potential_marker_eV),
+        spacecraft_potential_V=float(spacecraft_potential) if spacecraft_potential is not None else None,
+        spacecraft_potential_marker_eV=(
+            float(spacecraft_potential_marker_eV) if spacecraft_potential_marker_eV is not None else None
+        ),
         forward_pitch_max_deg=float(forward_pitch_max_deg),
         backward_pitch_min_deg=float(backward_pitch_min_deg),
         energy_eV=pad_data["energy"].tolist(),
@@ -609,13 +636,20 @@ def main() -> None:
         day=day,
         extension="sts",
     )
-    lpw_file = Path(args.lpw_file).expanduser().resolve() if args.lpw_file else infer_daily_file(
-        data_root=data_root,
-        instrument="lpw",
-        datatype_alias="mrgscpot",
-        day=day,
-        extension="cdf",
-    )
+    if args.lpw_file:
+        lpw_file = Path(args.lpw_file).expanduser().resolve()
+    else:
+        try:
+            lpw_file = infer_daily_file(
+                data_root=data_root,
+                instrument="lpw",
+                datatype_alias="mrgscpot",
+                day=day,
+                extension="cdf",
+            )
+        except FileNotFoundError as exc:
+            print(f"[spectra] {exc}", flush=True)
+            lpw_file = None
 
     result = process_target_time(
         target_time=target_time,
