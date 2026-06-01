@@ -325,11 +325,65 @@ def median_valid(values: np.ndarray, axis: int) -> np.ndarray:
 
 def average_positive_flux(values: np.ndarray, axis: int) -> np.ndarray:
     flux = np.asarray(values, dtype=float)
-    valid = np.isfinite(flux) & (flux > 0.0)
+    valid = np.isfinite(flux) & (flux >=0.0)
     summed = np.sum(np.where(valid, flux, 0.0), axis=axis)
     counts = np.sum(valid, axis=axis)
     averaged = np.divide(summed, counts, out=np.zeros_like(summed, dtype=float), where=counts > 0)
     return np.nan_to_num(averaged, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def static_axis_key(value: float) -> float:
+    return round(float(value), 8)
+
+
+def infer_static_sweep_indices(sweep_values: np.ndarray, n_sweeps: int) -> np.ndarray:
+    indices = np.asarray(sweep_values, dtype=float).reshape(-1)
+    result = np.full(indices.shape, -1, dtype=int)
+    finite = np.isfinite(indices)
+    if not np.any(finite):
+        return result
+    integer_values = indices[finite].astype(int)
+    unique = np.unique(integer_values)
+    # The STATIC SIS example uses swp_ind directly as an array index. Keep it
+    # zero-based unless a file explicitly contains the one-based upper endpoint.
+    if unique.size and unique.min() >= 1 and unique.max() == n_sweeps:
+        integer_values = integer_values - 1
+    result[finite] = integer_values
+    return result
+
+
+def common_static_axis(axis_sets: list[np.ndarray]) -> np.ndarray:
+    values_by_key: dict[float, float] = {}
+    for axis in axis_sets:
+        for value in np.asarray(axis, dtype=float).reshape(-1):
+            if np.isfinite(value) and value > 0.0:
+                values_by_key.setdefault(static_axis_key(value), float(value))
+    return np.asarray([values_by_key[key] for key in sorted(values_by_key)], dtype=float)
+
+
+def regrid_static_rows(
+    row_values: np.ndarray,
+    row_axes: list[np.ndarray],
+    target_axis: np.ndarray,
+) -> np.ndarray:
+    target_lookup = {static_axis_key(value): index for index, value in enumerate(np.asarray(target_axis, dtype=float))}
+    output = np.full((len(row_axes), len(target_axis)), np.nan, dtype=float)
+    for row_index, (values, axis) in enumerate(zip(np.asarray(row_values, dtype=float), row_axes)):
+        sums = np.zeros(len(target_axis), dtype=float)
+        counts = np.zeros(len(target_axis), dtype=int)
+        for value, coordinate in zip(np.asarray(values, dtype=float).reshape(-1), np.asarray(axis, dtype=float).reshape(-1)):
+            target_index = target_lookup.get(static_axis_key(coordinate))
+            if target_index is None or not np.isfinite(value):
+                continue
+            sums[target_index] += float(value)
+            counts[target_index] += 1
+        output[row_index] = np.divide(
+            sums,
+            counts,
+            out=np.full(len(target_axis), np.nan, dtype=float),
+            where=counts > 0,
+        )
+    return output
 
 
 def load_static_context(path: Path, start: datetime, end: datetime) -> dict | None:
@@ -342,7 +396,8 @@ def load_static_context(path: Path, start: datetime, end: datetime) -> dict | No
     flux = pick_first_variable(cdf, ["eflux"])
     energy = pick_first_variable(cdf, ["energy"])
     mass_arr = pick_first_variable(cdf, ["mass_arr"])
-    if flux is None or energy is None or mass_arr is None:
+    swp_ind = pick_first_variable(cdf, ["swp_ind"])
+    if flux is None or energy is None or mass_arr is None or swp_ind is None:
         return None
 
     flux = np.asarray(flux, dtype=float)
@@ -351,16 +406,27 @@ def load_static_context(path: Path, start: datetime, end: datetime) -> dict | No
     if flux.ndim != 3 or energy.ndim != 3 or mass_arr.ndim != 3:
         return None
 
-    # STATIC c6-32e64m stores eflux with shape (time, mass_bin, energy_bin).
-    # The coordinate arrays have shape (mass_bin, energy_bin, sweep_table), so we
-    # collapse over the unused dimensions to derive nominal axes.
-    energy_axis_values = np.nanmedian(energy, axis=(0, 2))
-    mass_axis_values = np.nanmedian(mass_arr, axis=(1, 2))
     selected_flux = flux[time_mask]
-
-    energy_spectrogram = average_positive_flux(selected_flux, axis=1)
-    mass_spectrogram = average_positive_flux(selected_flux, axis=2)
     selected_times = times[time_mask]
+    sweep_indices = infer_static_sweep_indices(swp_ind, energy.shape[2])[time_mask]
+    valid_sweep = (sweep_indices >= 0) & (sweep_indices < energy.shape[2])
+    if not np.any(valid_sweep):
+        return None
+
+    selected_flux = selected_flux[valid_sweep]
+    selected_times = selected_times[valid_sweep]
+    sweep_indices = sweep_indices[valid_sweep]
+
+    energy_axes_by_sweep = np.asarray(energy[0, :, :], dtype=float)
+    mass_axes_by_sweep = np.nanmean(mass_arr, axis=1)
+    energy_rows = average_positive_flux(selected_flux, axis=1)
+    mass_rows = average_positive_flux(selected_flux, axis=2)
+    energy_row_axes = [energy_axes_by_sweep[:, sweep_index] for sweep_index in sweep_indices]
+    mass_row_axes = [mass_axes_by_sweep[:, sweep_index] for sweep_index in sweep_indices]
+    energy_axis_values = common_static_axis(energy_row_axes)
+    mass_axis_values = common_static_axis(mass_row_axes)
+    energy_spectrogram = regrid_static_rows(energy_rows, energy_row_axes, energy_axis_values)
+    mass_spectrogram = regrid_static_rows(mass_rows, mass_row_axes, mass_axis_values)
 
     return {
         "times_unix": selected_times.tolist(),
@@ -368,7 +434,46 @@ def load_static_context(path: Path, start: datetime, end: datetime) -> dict | No
         "mass_amu": np.asarray(mass_axis_values, dtype=float).tolist(),
         "energy_eflux": energy_spectrogram.tolist(),
         "mass_eflux": mass_spectrogram.tolist(),
+        "energy_eV_by_time": [np.asarray(axis, dtype=float).tolist() for axis in energy_row_axes],
+        "energy_eflux_by_time": np.asarray(energy_rows, dtype=float).tolist(),
+        "mass_amu_by_time": [np.asarray(axis, dtype=float).tolist() for axis in mass_row_axes],
+        "mass_eflux_by_time": np.asarray(mass_rows, dtype=float).tolist(),
+        "sweep_indices_0_based": sweep_indices.tolist(),
         "source_file": str(path),
+    }
+
+
+def concat_static_context(parts: list[dict]) -> dict | None:
+    if not parts:
+        return None
+
+    energy_axis = common_static_axis([np.asarray(part.get("energy_eV", []), dtype=float) for part in parts])
+    mass_axis = common_static_axis([np.asarray(part.get("mass_amu", []), dtype=float) for part in parts])
+    times: list[float] = []
+    energy_parts: list[np.ndarray] = []
+    mass_parts: list[np.ndarray] = []
+
+    for part in parts:
+        part_times = np.asarray(part.get("times_unix", []), dtype=float)
+        times.extend(part_times.tolist())
+        part_energy_axis = np.asarray(part.get("energy_eV", []), dtype=float)
+        part_mass_axis = np.asarray(part.get("mass_amu", []), dtype=float)
+        part_energy = np.asarray(part.get("energy_eflux", []), dtype=float)
+        part_mass = np.asarray(part.get("mass_eflux", []), dtype=float)
+        energy_parts.append(regrid_static_rows(part_energy, [part_energy_axis] * len(part_energy), energy_axis))
+        mass_parts.append(regrid_static_rows(part_mass, [part_mass_axis] * len(part_mass), mass_axis))
+
+    return {
+        "times_unix": times,
+        "energy_eV": energy_axis.tolist(),
+        "mass_amu": mass_axis.tolist(),
+        "energy_eflux": np.vstack(energy_parts).tolist() if energy_parts else [],
+        "mass_eflux": np.vstack(mass_parts).tolist() if mass_parts else [],
+        "energy_eV_by_time": [axis for part in parts for axis in part.get("energy_eV_by_time", [])],
+        "energy_eflux_by_time": [row for part in parts for row in part.get("energy_eflux_by_time", [])],
+        "mass_amu_by_time": [axis for part in parts for axis in part.get("mass_amu_by_time", [])],
+        "mass_eflux_by_time": [row for part in parts for row in part.get("mass_eflux_by_time", [])],
+        "source_file": parts[0].get("source_file"),
     }
 
 
@@ -686,6 +791,8 @@ def ensure_day_files(day: date, data_root: Path, auto_download_missing_data: boo
             key = "pad"
         elif spec.instrument == "sta":
             key = "sta_c6"
+        elif spec.instrument != "mag":
+            continue
         elif "pc1s" in spec.aliases:
             key = "mag_pc"
         else:
