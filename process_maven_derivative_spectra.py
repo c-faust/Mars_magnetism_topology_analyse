@@ -3,7 +3,7 @@ from __future__ import annotations
 Single-time MAVEN energy-derivative spectrum processing.
 
 This script mirrors `process_maven_spectra.py`, but plots normalized
-dFlux/dE spectra instead of raw directional flux spectra. Outputs are written
+d(log Flux)/d(log Energy) spectra instead of raw directional flux spectra. Outputs are written
 to the same timestamped directory used by `process_maven_spectra.py`.
 
 Example:
@@ -59,10 +59,10 @@ class DerivativeSpectrumResult:
     energy_eV: list[float]
     forward_flux: list[float | None]
     backward_flux: list[float | None]
-    forward_dflux_denergy: list[float | None]
-    backward_dflux_denergy: list[float | None]
-    forward_normalized_dflux_denergy: list[float | None]
-    backward_normalized_dflux_denergy: list[float | None]
+    forward_dlogflux_dlogenergy: list[float | None]
+    backward_dlogflux_dlogenergy: list[float | None]
+    forward_normalized_dlogflux_dlogenergy: list[float | None]
+    backward_normalized_dlogflux_dlogenergy: list[float | None]
     forward_pitch_bins_deg: list[float]
     backward_pitch_bins_deg: list[float]
 
@@ -75,7 +75,7 @@ def finite_or_none(values: np.ndarray) -> list[float | None]:
 
 
 def flux_energy_derivative(energy_eV: np.ndarray, flux: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Return dFlux/dE on the sorted energy grid while preserving missing bins."""
+    """Return d(log Flux)/d(log Energy) on the sorted energy grid."""
 
     energy = np.asarray(energy_eV, dtype=float)
     flux = np.asarray(flux, dtype=float)
@@ -84,18 +84,18 @@ def flux_energy_derivative(energy_eV: np.ndarray, flux: np.ndarray) -> tuple[np.
     sorted_flux = flux[order]
     derivative = np.full(sorted_flux.shape, np.nan, dtype=float)
 
-    valid = np.isfinite(sorted_energy) & np.isfinite(sorted_flux)
+    valid = np.isfinite(sorted_energy) & np.isfinite(sorted_flux) & (sorted_energy > 0.0) & (sorted_flux > 0.0)
     if np.count_nonzero(valid) < 2:
         return sorted_energy, derivative
 
-    valid_energy = sorted_energy[valid]
-    valid_flux = sorted_flux[valid]
-    unique_energy, unique_indices = np.unique(valid_energy, return_index=True)
-    if unique_energy.size < 2:
+    valid_log_energy = np.log10(sorted_energy[valid])
+    valid_log_flux = np.log10(sorted_flux[valid])
+    unique_log_energy, unique_indices = np.unique(valid_log_energy, return_index=True)
+    if unique_log_energy.size < 2:
         return sorted_energy, derivative
 
-    unique_flux = valid_flux[unique_indices]
-    derivative[valid] = np.gradient(unique_flux, unique_energy, edge_order=1)
+    unique_log_flux = valid_log_flux[unique_indices]
+    derivative[valid] = np.gradient(unique_log_flux, unique_log_energy, edge_order=1)
     return sorted_energy, derivative
 
 
@@ -158,7 +158,7 @@ def plot_derivative_spectra(
             marker="o",
             markersize=3,
             linewidth=1.2,
-            label=f"Parallel dF/dE, pitch < {forward_pitch_max_deg:g} deg",
+            label=f"Parallel d(logF)/d(logE), pitch < {forward_pitch_max_deg:g} deg",
         )
     if np.any(np.isfinite(backward)):
         plt.semilogx(
@@ -167,7 +167,7 @@ def plot_derivative_spectra(
             marker="s",
             markersize=3,
             linewidth=1.2,
-            label=f"Anti-parallel dF/dE, pitch > {backward_pitch_min_deg:g} deg",
+            label=f"Anti-parallel d(logF)/d(logE), pitch > {backward_pitch_min_deg:g} deg",
         )
     if (
         spacecraft_potential_marker_eV is not None
@@ -190,7 +190,7 @@ def plot_derivative_spectra(
         plt.xlim(*x_limits)
     plt.axhline(0.0, color="0.35", linewidth=0.8, alpha=0.7)
     plt.xlabel("Energy (eV)")
-    plt.ylabel(f"Normalized dFlux/dE ({normalization})")
+    plt.ylabel(f"Normalized d(logF)/d(logE) ({normalization})")
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
     if plt.gca().get_legend_handles_labels()[0]:
         plt.legend()
@@ -259,14 +259,14 @@ def process_target_time(
         forward_pitch_max_deg=float(forward_pitch_max_deg),
         backward_pitch_min_deg=float(backward_pitch_min_deg),
         normalization=normalization,
-        derivative_method="np.gradient(flux, energy_eV), edge_order=1",
+        derivative_method="np.gradient(log10(flux), log10(energy_eV)), edge_order=1",
         energy_eV=energy.tolist(),
         forward_flux=finite_or_none(np.asarray(forward_flux, dtype=float)[np.argsort(pad_data["energy"])]),
         backward_flux=finite_or_none(np.asarray(backward_flux, dtype=float)[np.argsort(pad_data["energy"])]),
-        forward_dflux_denergy=finite_or_none(forward_derivative),
-        backward_dflux_denergy=finite_or_none(backward_derivative),
-        forward_normalized_dflux_denergy=finite_or_none(forward_normalized),
-        backward_normalized_dflux_denergy=finite_or_none(backward_normalized),
+        forward_dlogflux_dlogenergy=finite_or_none(forward_derivative),
+        backward_dlogflux_dlogenergy=finite_or_none(backward_derivative),
+        forward_normalized_dlogflux_dlogenergy=finite_or_none(forward_normalized),
+        backward_normalized_dlogflux_dlogenergy=finite_or_none(backward_normalized),
         forward_pitch_bins_deg=forward_bins.tolist(),
         backward_pitch_bins_deg=backward_bins.tolist(),
     )
@@ -279,7 +279,7 @@ def process_target_time(
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Process MAVEN PAD and MAG files into a normalized dFlux/dE spectrum.")
+    parser = argparse.ArgumentParser(description="Process MAVEN PAD and MAG files into a normalized d(logF)/d(logE) spectrum.")
     parser.add_argument("--time", required=True, help="Target timestamp, for example 2024-11-07T12:00:00.")
     parser.add_argument("--pad-file", help="Path to the SWE PAD CDF file.")
     parser.add_argument("--mag-file", help="Path to the MAG STS file.")
@@ -306,7 +306,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--normalization",
         choices=("zscore", "minmax", "l2", "maxabs", "none"),
         default=DEFAULT_NORMALIZATION,
-        help="Per-direction normalization applied after dFlux/dE is computed.",
+        help="Per-direction normalization applied after d(logF)/d(logE) is computed.",
     )
     parser.add_argument("--data-root", default=str(DEFAULT_DATA_ROOT), help="Root directory for downloaded data.")
     parser.add_argument(
