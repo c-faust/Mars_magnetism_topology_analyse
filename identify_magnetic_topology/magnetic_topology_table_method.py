@@ -54,6 +54,9 @@ from identify_magnetic_topology.shape_parameter_method import (
 
 DEFAULT_OUTPUT_ROOT = Path("outputs") / "identify_magnetic_topology" / "magnetic_topology_based_on_Xu2019"
 DEFAULT_RATIO_ENERGY_RANGE_EV = (35.0, 60.0)
+DEFAULT_LOSS_CONE_PAD_SCORE_THRESHOLD = -3.0
+DEFAULT_ELECTRON_VOID_ENERGY_EV = 40.0
+DEFAULT_ELECTRON_VOID_FLUX_THRESHOLD = 1.0e5
 
 
 def format_unix_time(value: float) -> str:
@@ -79,26 +82,11 @@ def shape_class(shape_parameter: float, photoelectron_threshold: float) -> str:
     return "Phe" if value <= photoelectron_threshold else "SWe"
 
 
-def pad_lc_class(pad_class: str) -> str:
-    if pad_class == "loss_cone":
-        return "LC"
-    if pad_class in {"isotropic", "beam"}:
-        return "No LC"
-    if pad_class == "electron_depletion":
-        return "void"
-    return "unknown"
-
-
-def is_void_pad(row: pd.Series | None) -> bool:
-    if row is None:
-        return False
-    pad_shape = str(row.get("pad_shape", ""))
-    if pad_shape == "electron_depletion":
-        return True
-    value = row.get("depletion_flag", False)
-    if isinstance(value, str):
-        return value.lower() == "true"
-    return bool(value)
+def pad_lc_class_from_score(score: float, loss_cone_threshold: float) -> str:
+    value = finite_float(score)
+    if not np.isfinite(value):
+        return "unknown"
+    return "LC" if value < loss_cone_threshold else "No LC"
 
 
 def band_mean_flux(energy_eV: np.ndarray, flux: np.ndarray, energy_range_eV: tuple[float, float]) -> float:
@@ -117,6 +105,8 @@ def compute_at_ratio_for_shape_rows(
     energy_range_eV: tuple[float, float],
     forward_pitch_max_deg: float,
     backward_pitch_min_deg: float,
+    electron_void_energy_eV: float,
+    electron_void_flux_threshold: float,
 ) -> dict[float, dict]:
     pad_cache: dict[str, dict | None] = {}
     ratio_by_time: dict[float, dict] = {}
@@ -154,6 +144,24 @@ def compute_at_ratio_for_shape_rows(
 
         parallel_band_flux = band_mean_flux(np.asarray(pad_data["energy"], dtype=float), parallel_flux, energy_range_eV)
         antiparallel_band_flux = band_mean_flux(np.asarray(pad_data["energy"], dtype=float), antiparallel_flux, energy_range_eV)
+        energy = np.asarray(pad_data["energy"], dtype=float)
+        finite_energy_indices = np.where(np.isfinite(energy))[0]
+        if finite_energy_indices.size:
+            void_energy_index = finite_energy_indices[
+                np.argmin(np.abs(energy[finite_energy_indices] - electron_void_energy_eV))
+            ]
+            void_energy_actual = float(energy[void_energy_index])
+            flux_at_void_energy = np.asarray(pad_data["flux"][time_index], dtype=float)[:, void_energy_index]
+            flux_40eV = (
+                float(np.nanmean(flux_at_void_energy))
+                if np.any(np.isfinite(flux_at_void_energy))
+                else float("nan")
+            )
+        else:
+            void_energy_actual = float("nan")
+            flux_40eV = float("nan")
+        electron_void = bool(np.isfinite(flux_40eV) and flux_40eV < electron_void_flux_threshold)
+
         toward_flux, away_flux, toward_source, away_source = map_parallel_antiparallel_to_toward_away(
             parallel_band_flux,
             antiparallel_band_flux,
@@ -174,6 +182,11 @@ def compute_at_ratio_for_shape_rows(
             "ratio_swe_delta_seconds": abs(float(pad_times[time_index]) - sample_unix),
             "ratio_energy_low_eV": energy_range_eV[0],
             "ratio_energy_high_eV": energy_range_eV[1],
+            "electron_void": electron_void,
+            "electron_void_target_energy_eV": electron_void_energy_eV,
+            "electron_void_actual_energy_eV": void_energy_actual,
+            "electron_void_flux": flux_40eV,
+            "electron_void_flux_threshold": electron_void_flux_threshold,
             "ratio_source_file": str(pad_data.get("source_file", "")),
             "status": "ok" if np.isfinite(ratio) else "ratio_nan",
         }
@@ -202,7 +215,7 @@ def topology_from_table(
     void: bool,
 ) -> tuple[str, str, str]:
     if void:
-        return "C-V", "4", "Void electron depletion PAD."
+        return "C-V", "4", "Superthermal electron void: the electron flux near 40 eV is below the configured absolute threshold."
 
     if away_shape_class == "Phe" and toward_shape_class == "Phe":
         if np.isfinite(ratio) and 0.2 < ratio < 5.0:
@@ -240,6 +253,7 @@ def build_topology_dataframe(
     ratio_by_time: dict[float, dict],
     photoelectron_shape_threshold: float,
     max_pad_delta_seconds: float,
+    loss_cone_pad_score_threshold: float,
 ) -> pd.DataFrame:
     output_rows = []
     for row in shape_rows:
@@ -262,15 +276,15 @@ def build_topology_dataframe(
             toward_pad_score = float("nan")
             away_pad_score = float("nan")
         else:
-            away_pad = pad_lc_class(str(pad_row.get("away_class", "")))
-            toward_pad = pad_lc_class(str(pad_row.get("toward_class", "")))
+            toward_pad_score = finite_float(pad_row.get("toward_pad_score"))
+            away_pad_score = finite_float(pad_row.get("away_pad_score"))
+            away_pad = pad_lc_class_from_score(away_pad_score, loss_cone_pad_score_threshold)
+            toward_pad = pad_lc_class_from_score(toward_pad_score, loss_cone_pad_score_threshold)
             pad_time_utc = str(pad_row.get("time", ""))
             pad_valid = bool(pad_row.get("valid", False))
             pad_reason = str(pad_row.get("reason", ""))
-            toward_pad_score = finite_float(pad_row.get("toward_pad_score"))
-            away_pad_score = finite_float(pad_row.get("away_pad_score"))
 
-        void = is_void_pad(pad_row)
+        void = bool(ratio_info.get("electron_void", False))
         ratio = finite_float(ratio_info.get("at_ratio_35_60eV"))
         topology, subcase, reason = topology_from_table(
             away_shape,
@@ -297,7 +311,13 @@ def build_topology_dataframe(
                 "toward_pad_lc": toward_pad,
                 "away_pad_score": away_pad_score,
                 "toward_pad_score": toward_pad_score,
+                "loss_cone_pad_score_threshold": loss_cone_pad_score_threshold,
                 "void": bool(void),
+                "superthermal_electron_void": bool(void),
+                "electron_void_target_energy_eV": finite_float(ratio_info.get("electron_void_target_energy_eV")),
+                "electron_void_actual_energy_eV": finite_float(ratio_info.get("electron_void_actual_energy_eV")),
+                "electron_void_flux": finite_float(ratio_info.get("electron_void_flux")),
+                "electron_void_flux_threshold": finite_float(ratio_info.get("electron_void_flux_threshold")),
                 "at_ratio_35_60eV": ratio,
                 "away_flux_35_60eV": finite_float(ratio_info.get("away_flux_35_60eV")),
                 "toward_flux_35_60eV": finite_float(ratio_info.get("toward_flux_35_60eV")),
@@ -309,6 +329,9 @@ def build_topology_dataframe(
                 "field_direction": str(row.get("field_direction", "")),
                 "field_angle_deg": finite_float(row.get("field_angle_deg")),
                 "spacecraft_potential_V": finite_float(row.get("spacecraft_potential_V")),
+                "lpw_available": bool(row.get("lpw_available", False)),
+                "energy_correction_applied": bool(row.get("energy_correction_applied", False)),
+                "energy_correction_potential_V": finite_float(row.get("energy_correction_potential_V")),
                 "ratio_status": str(ratio_info.get("status", "")),
                 "ratio_swe_time_utc": str(ratio_info.get("ratio_swe_time_utc", "")),
                 "ratio_swe_delta_seconds": finite_float(ratio_info.get("ratio_swe_delta_seconds")),
@@ -370,11 +393,29 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pad-group-size", type=int, default=4)
     parser.add_argument("--pad-keep-partial", action="store_true")
     parser.add_argument("--pad-threshold-sigma", type=float, default=2.0)
+    parser.add_argument(
+        "--loss-cone-pad-score-threshold",
+        type=float,
+        default=DEFAULT_LOSS_CONE_PAD_SCORE_THRESHOLD,
+        help="A directional PAD score below this threshold is classified as LC.",
+    )
     parser.add_argument("--max-pad-delta-seconds", type=float, default=6.0)
     parser.add_argument("--parallel-low", nargs=2, type=float, default=(0.0, 30.0))
     parser.add_argument("--perpendicular", nargs=2, type=float, default=(85.0, 95.0))
     parser.add_argument("--antiparallel-high", nargs=2, type=float, default=(150.0, 180.0))
     parser.add_argument("--ratio-energy-range", nargs=2, type=float, default=DEFAULT_RATIO_ENERGY_RANGE_EV)
+    parser.add_argument(
+        "--electron-void-energy",
+        type=float,
+        default=DEFAULT_ELECTRON_VOID_ENERGY_EV,
+        help="Target electron energy used for the superthermal electron void test.",
+    )
+    parser.add_argument(
+        "--electron-void-flux-threshold",
+        type=float,
+        default=DEFAULT_ELECTRON_VOID_FLUX_THRESHOLD,
+        help="Flux below this absolute threshold is classified as a superthermal electron void.",
+    )
     return parser
 
 
@@ -457,6 +498,8 @@ def main() -> None:
         energy_range_eV=ratio_energy_range,
         forward_pitch_max_deg=float(args.forward_pitch_max),
         backward_pitch_min_deg=float(args.backward_pitch_min),
+        electron_void_energy_eV=float(args.electron_void_energy),
+        electron_void_flux_threshold=float(args.electron_void_flux_threshold),
     )
     topology_df = build_topology_dataframe(
         shape_rows,
@@ -464,6 +507,7 @@ def main() -> None:
         ratio_by_time,
         photoelectron_shape_threshold=float(args.photoelectron_shape_threshold),
         max_pad_delta_seconds=float(args.max_pad_delta_seconds),
+        loss_cone_pad_score_threshold=float(args.loss_cone_pad_score_threshold),
     )
 
     topology_csv = output_dir / "magnetic_topology_classification.csv"
@@ -480,6 +524,11 @@ def main() -> None:
         "shape_energy_range_eV": list(shape_energy_range),
         "pad_energy_range_eV": list(pad_energy_range),
         "ratio_energy_range_eV": list(ratio_energy_range),
+        "loss_cone_pad_score_threshold": float(args.loss_cone_pad_score_threshold),
+        "loss_cone_rule": "A direction is classified as LC when its PAD score is strictly below loss_cone_pad_score_threshold; otherwise a finite score is No LC.",
+        "electron_void_energy_eV": float(args.electron_void_energy),
+        "electron_void_flux_threshold": float(args.electron_void_flux_threshold),
+        "electron_void_rule": "The pitch-angle-mean differential energy flux at the available SWE energy channel nearest electron_void_energy_eV is below electron_void_flux_threshold.",
         "spectral_smoothing": {
             "enabled": spectral_smoothing_enabled,
             "window_points": spectral_smoothing_points,

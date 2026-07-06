@@ -292,6 +292,9 @@ def append_nan_row(
             "away_shape_parameter": float("nan"),
             "spacecraft_potential_V": float("nan"),
             "lpw_delta_seconds": float("nan"),
+            "lpw_available": False,
+            "energy_correction_applied": False,
+            "energy_correction_potential_V": 0.0,
             "mag_time_utc": "",
             "mag_delta_seconds": float("nan"),
             "field_direction": "",
@@ -323,7 +326,11 @@ def compute_shape_parameters(
 ) -> tuple[list[dict], dict]:
     lpw = load_lpw_interval(data_root, start, end, spacecraft_potential_min_flag)
     if lpw is None:
-        raise FileNotFoundError("No usable LPW spacecraft-potential samples were found in the requested interval.")
+        print(
+            "[shape_parameter] no usable LPW spacecraft-potential samples were found; "
+            "continuing without spacecraft-potential energy correction.",
+            flush=True,
+        )
     magnetic_geometry = load_magnetic_geometry_interval(data_root, start, end)
     if magnetic_geometry is None:
         raise FileNotFoundError("No usable MAG sunstate-1sec samples were found in the requested interval.")
@@ -370,7 +377,7 @@ def compute_shape_parameters(
                 )
                 continue
 
-            lpw_sample = nearest_lpw_sample(lpw, sample_time, max_lpw_delta_seconds)
+            lpw_sample = None if lpw is None else nearest_lpw_sample(lpw, sample_time, max_lpw_delta_seconds)
             record = {
                 "time_unix": sample_unix,
                 "time_utc": sample_time.isoformat(timespec="seconds"),
@@ -381,11 +388,17 @@ def compute_shape_parameters(
             }
             if lpw_sample is None:
                 skip_counts["missing_lpw_sample"] += 1
-                record["status"] = "missing_lpw_sample"
+                record["spacecraft_potential_V"] = float("nan")
+                record["lpw_delta_seconds"] = float("nan")
+                record["lpw_available"] = False
+                record["energy_correction_potential_V"] = 0.0
+                record["status"] = "missing_lpw_no_energy_correction"
             else:
                 spacecraft_potential, lpw_delta = lpw_sample
                 record["spacecraft_potential_V"] = spacecraft_potential
                 record["lpw_delta_seconds"] = lpw_delta
+                record["lpw_available"] = True
+                record["energy_correction_potential_V"] = spacecraft_potential
             sample_records.append(record)
 
     sample_records.sort(key=lambda item: float(item["time_unix"]))
@@ -394,16 +407,15 @@ def compute_shape_parameters(
     for index, record in enumerate(sample_records):
         sample_unix = float(record["time_unix"])
         sample_time = datetime.fromtimestamp(sample_unix, tz=timezone.utc)
-        if "spacecraft_potential_V" not in record:
-            append_nan_row(rows, sample_time, str(record.get("status", "missing_lpw_sample")), smoothing_sample_count=0)
-            continue
         if "energy_eV" not in record:
             append_nan_row(rows, sample_time, str(record.get("status", "directional_spectrum_error")), smoothing_sample_count=0)
             continue
 
-        spacecraft_potential = float(record["spacecraft_potential_V"])
-        lpw_delta = float(record["lpw_delta_seconds"])
-        corrected_energy = corrected_energy_axis(record["energy_eV"], spacecraft_potential)
+        spacecraft_potential = float(record.get("spacecraft_potential_V", float("nan")))
+        lpw_delta = float(record.get("lpw_delta_seconds", float("nan")))
+        lpw_available = bool(record.get("lpw_available", False))
+        correction_potential = float(record.get("energy_correction_potential_V", 0.0))
+        corrected_energy = corrected_energy_axis(record["energy_eV"], correction_potential)
         smoothed_parallel_flux, parallel_smoothing_count = smoothed_flux_for_record(
             sample_records,
             index,
@@ -466,6 +478,8 @@ def compute_shape_parameters(
         if not np.isfinite(toward_shape) or not np.isfinite(away_shape):
             if status == "ok":
                 status = "toward_away_nan"
+        if not lpw_available:
+            status = f"{status}_missing_lpw_no_energy_correction"
 
         rows.append(
             {
@@ -478,6 +492,9 @@ def compute_shape_parameters(
                 "away_shape_parameter": away_shape,
                 "spacecraft_potential_V": spacecraft_potential,
                 "lpw_delta_seconds": lpw_delta,
+                "lpw_available": lpw_available,
+                "energy_correction_applied": lpw_available,
+                "energy_correction_potential_V": correction_potential,
                 "mag_time_utc": mag_time_utc,
                 "mag_delta_seconds": mag_delta_seconds,
                 "field_direction": field_direction,
@@ -508,6 +525,9 @@ def write_shape_csv(path: Path, rows: list[dict]) -> None:
                 "away_shape_parameter",
                 "spacecraft_potential_V",
                 "lpw_delta_seconds",
+                "lpw_available",
+                "energy_correction_applied",
+                "energy_correction_potential_V",
                 "mag_time_utc",
                 "mag_delta_seconds",
                 "field_direction",
@@ -591,7 +611,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--spectral-smoothing-window",
         type=int,
-        default=11,
+        default=5,
         help="Centered moving-average window, in SWE samples, applied to directional flux spectra before df and shape-parameter calculation. Use 1 for no smoothing.",
     )
     parser.add_argument(
@@ -666,7 +686,7 @@ def main() -> None:
             "window_points": spectral_smoothing_window_points,
             "method": "centered nanmean over directional flux spectra before spacecraft-potential energy correction, df calculation, and shape-parameter calculation",
         },
-        "energy_correction": "corrected_energy_eV = measured_energy_eV - spacecraft_potential_V",
+        "energy_correction": "When LPW is available: corrected_energy_eV = measured_energy_eV - spacecraft_potential_V. When LPW is missing: continue with correction potential 0 V and mark lpw_available=false / energy_correction_applied=false.",
         "magnetic_direction_rule": "MAG SS/MSO geometry is used. If angle(B, radial position) > 90 deg, B points toward the surface and parallel maps to toward; if angle < 90 deg, B points away from the surface and antiparallel maps to toward.",
         "max_mag_delta_seconds": float(args.max_mag_delta_seconds),
         "skip_counts": skip_counts,

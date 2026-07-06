@@ -295,14 +295,9 @@ def perpendicular_flux_with_error(
     sigma: np.ndarray,
     bounds: tuple[float, float],
     target_deg: float = 90.0,
+    fallback_width_deg: float = 10.0,
 ) -> tuple[float, float, int, str, float, float]:
-    """Return perpendicular flux from a PA band mean, or interpolate at 90 deg.
-
-    If no valid bin is available inside the perpendicular band, the nearest
-    valid bin below the lower bound and nearest valid bin above the upper bound
-    are used for a linear interpolation to target_deg.  Sigma is propagated
-    with the same interpolation weights.
-    """
+    """Return perpendicular-band mean, or interpolate to 90 deg from adjacent bands."""
     pitch = np.asarray(pitch_angle_deg, dtype=float)
     values = np.asarray(flux, dtype=float)
     errors = np.asarray(sigma, dtype=float)
@@ -312,8 +307,12 @@ def perpendicular_flux_with_error(
         return band_flux, band_sigma, band_count, "mean", bounds[0], bounds[1]
 
     usable = np.isfinite(pitch) & np.isfinite(values) & np.isfinite(errors)
-    lower_candidates = np.where(usable & (pitch < bounds[0]))[0]
-    upper_candidates = np.where(usable & (pitch > bounds[1]))[0]
+    lower_candidates = np.where(
+        usable & (pitch >= bounds[0] - fallback_width_deg) & (pitch < bounds[0])
+    )[0]
+    upper_candidates = np.where(
+        usable & (pitch > bounds[1]) & (pitch <= bounds[1] + fallback_width_deg)
+    )[0]
     if lower_candidates.size == 0 or upper_candidates.size == 0:
         return float("nan"), float("nan"), 0, "missing", float("nan"), float("nan")
 
@@ -945,7 +944,7 @@ def main() -> None:
         "keep_partial": bool(args.keep_partial),
         "threshold_sigma": float(args.threshold_sigma),
         "field_aligned_window_deg": float(args.field_aligned_window),
-        "score_definition": "PAD score = (fFA - fperp) / sqrt(sigma_FA^2 + sigma_perp^2); fFA is the mean flux over 0-30 deg or 150-180 deg. fperp is the mean flux over 85-95 deg when available; otherwise it is linearly interpolated to 90 deg from the nearest valid bin below 85 deg and nearest valid bin above 95 deg.",
+        "score_definition": "PAD score = (fFA - fperp) / sqrt(sigma_FA^2 + sigma_perp^2); fFA is the mean flux over 0-30 deg or 150-180 deg. fperp is the mean flux over 85-95 deg when available; otherwise it is linearly interpolated to 90 deg from the nearest valid bin within 75-85 deg and the nearest valid bin within 95-105 deg.",
         "sigma_source": "Default: Poisson statistics of measured electron fluxes using raw counts, sigma_flux = abs(diff_en_fluxes) / sqrt(counts). If a file has no usable 3D counts variable, fall back to product uncertainty/variance and mark each row's sigma_source accordingly. Sigma is then propagated through energy averaging, 8 s coadding, pitch-bin averaging, and fFA-fperp subtraction.",
         "field_aligned_window_selection": "Disabled by current logic: field-aligned flux uses the full configured low/high PA ranges. The --field-aligned-window argument is retained for CLI compatibility but is not used.",
         "pitch_angle_bands": bands.__dict__,

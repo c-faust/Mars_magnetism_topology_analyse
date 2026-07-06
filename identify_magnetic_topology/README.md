@@ -28,6 +28,24 @@ A/T ratio = away_flux / toward_flux
 
 随后根据 Xu et al. 2019 的表格规则输出磁场拓扑类型。
 
+融合判别中的 loss cone 不直接使用 `PAD_score_method.py` 输出的分类标签，而是读取 toward/away PAD score 数值：
+
+```text
+PAD score < -3 -> LC
+PAD score >= -3 -> No LC
+```
+
+默认阈值 `-3` 可通过 `--loss-cone-pad-score-threshold` 调整。
+
+Superthermal electron void 使用 40 eV 附近电子微分能量通量的绝对阈值判断。程序选择最接近 40 eV 的 SWE 能道，并对该能道所有有效 pitch-angle flux 求平均：
+
+```text
+mean_flux_near_40eV < 1e5 eV cm^-2 s^-1 sr^-1 eV^-1
+-> superthermal electron void
+```
+
+目标能量和绝对阈值可分别通过 `--electron-void-energy` 和 `--electron-void-flux-threshold` 调整。
+
 默认输出目录：
 
 ```text
@@ -70,6 +88,9 @@ python identify_magnetic_topology\magnetic_topology_table_method.py `
   --photoelectron-shape-threshold 1.0 `
   --shape-energy-range 20 80 `
   --pad-energy-range 100 300 `
+  --loss-cone-pad-score-threshold -3 `
+  --electron-void-energy 40 `
+  --electron-void-flux-threshold 1e5 `
   --ratio-energy-range 35 60 `
   --spectral-smoothing-window 5
 ```
@@ -96,6 +117,9 @@ away_pad_lc
 toward_pad_lc
 at_ratio_35_60eV
 void
+electron_void_actual_energy_eV
+electron_void_flux
+electron_void_flux_threshold
 topology_reason
 ```
 
@@ -123,6 +147,16 @@ SWe = solar-wind/backscattered-like spectrum
 
 ```text
 corrected_energy_eV = measured_energy_eV - spacecraft_potential_V
+```
+
+如果某个时间点没有可用 LPW 数据，程序仍继续计算，但不对能量轴做 spacecraft-potential 平移。输出中会标记：
+
+```text
+spacecraft_potential_V = NaN
+lpw_available = False
+energy_correction_applied = False
+energy_correction_potential_V = 0
+status = ..._missing_lpw_no_energy_correction
 ```
 
 4. 对方向能谱做时间平滑，默认窗口为 5 个 SWE 样本。
@@ -192,7 +226,7 @@ fFA high side = 150-180 deg 内有效 bin 的平均 flux
 fperp         = 85-95 deg 内有效 bin 的平均 flux
 ```
 
-如果 85-95 deg 内没有有效 bin，则取低于 85 deg 的最近有效 bin 和高于 95 deg 的最近有效 bin，线性插值到 90 deg。
+如果 85-95 deg 内没有有效 bin，则取 75-85 deg 内最接近 85 deg 的有效 bin，以及 95-105 deg 内最接近 95 deg 的有效 bin，线性插值到 90 deg。任意一侧没有有效 bin 时，`fperp` 和对应 PAD score 记为缺失。
 
 sigma 默认来自 measured electron fluxes 的 Poisson statistics：
 
