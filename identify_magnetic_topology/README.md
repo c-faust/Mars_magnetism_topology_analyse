@@ -4,7 +4,8 @@
 
 1. 判断磁场方向：磁场指向火星表面还是远离火星表面。
 2. 分别计算 shape parameter 与 PAD score。
-3. 按 Xu et al. 2019 表格关系融合 shape/PAD/flux ratio，得到拓扑类型随时间变化。
+3. 调用 `region_id`，按相同的 shape 样本时间判断卫星所在区域。
+4. 先应用 `region_id=0/1 -> draped DP`，其他区域再按 Xu et al. 2019 表格融合 shape/PAD/flux ratio。
 
 所有命令默认从仓库根目录运行：
 
@@ -26,7 +27,20 @@ cd G:\本研\科学\MARS\ML\maven_code_linux
 A/T ratio = away_flux / toward_flux
 ```
 
-随后根据 Xu et al. 2019 的表格规则输出磁场拓扑类型。
+随后调用 `region_id` 并根据以下顺序输出磁场拓扑类型：
+
+```text
+region_id == 0 or region_id == 1
+-> topology = DP
+-> topology_label = draped DP
+-> topology_subcase = 7b
+
+其他 region_id
+-> 保留 Xu et al. 2019 shape/PAD/ratio 表格结果
+```
+
+`region_id` 使用每个 shape 样本的原始时间戳，不使用固定 cadence
+重新取样。CSV 同时保存覆盖前的 `table_topology`，用于追溯原始表格结果。
 
 融合判别中的 loss cone 不直接使用 `PAD_score_method.py` 输出的分类标签，而是读取 toward/away PAD score 数值：
 
@@ -69,6 +83,9 @@ magnetic_topology_timeseries.png
 summary.json
 shape_parameter_method\shape_parameters.csv
 PAD_score_method\pad_score_classification.csv
+region_id\region_id_timeseries.csv
+region_id\region_id_timeseries.png
+region_id\region_id_summary.json
 ```
 
 关键参数：
@@ -92,6 +109,8 @@ python identify_magnetic_topology\magnetic_topology_table_method.py `
   --electron-void-energy 40 `
   --electron-void-flux-threshold 1e5 `
   --ratio-energy-range 35 60 `
+  --region-id-boundary-margin-km 100 `
+  --max-region-id-delta-seconds 2 `
   --spectral-smoothing-window 5
 ```
 
@@ -110,7 +129,15 @@ python identify_magnetic_topology\magnetic_topology_table_method.py `
 ```text
 time_utc
 topology
+topology_label
 topology_subcase
+topology_source
+table_topology
+table_topology_subcase
+region_id
+region_name
+region_id_delta_seconds
+region_id_reason
 away_shape_class
 toward_shape_class
 away_pad_lc
@@ -133,7 +160,9 @@ Phe = photoelectron-like spectrum
 SWe = solar-wind/backscattered-like spectrum
 ```
 
-如果某个时间点 shape、PAD 或 ratio 信息不足，`topology` 会输出 `unknown`，不会强行分类。
+如果 `region_id` 为 0 或 1，即使 shape、PAD 或 ratio 信息不足，也会按
+case 7b 输出 `draped DP`。其他 `region_id` 仍遵循原表格；信息不足时输出
+`unknown`，不会强行分类。
 
 ## 2. shape_parameter_method.py
 

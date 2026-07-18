@@ -5,6 +5,24 @@ Render the magnetic-topology data panels as a static PNG.
 This is the Python counterpart of `magnetic_topology_data_panels.html`: it reads
 either a `topology_summary.json`-shaped dictionary or the local MAVEN daily data,
 picks a target time, and draws the same science context panels around that time.
+
+Panel catalog (use these stable IDs with ``--panels``):
+  1  STATIC ion energy spectrogram
+  2  STATIC light-ion mass spectrogram (0.5-1.5 amu)
+  3  STATIC heavy-ion mass spectrogram (>1.5 amu)
+  4  SWEA omnidirectional electron energy spectrogram
+  5  MAG field magnitude |B|
+  6  MAG field components Bx, By, Bz in MSO
+  7  SWEA PAD for energy band 1 (default 20-80 eV)
+  8  SWEA PAD for energy band 2 (default 111-140 eV)
+  9  Bottom UTC/position/latitude/longitude/altitude annotations
+ 10  region_id classification versus time
+
+Panel 9 is a coordinate annotation footer and is always placed last.
+
+Examples:
+  --panels 1 4 5 6 9
+  --panels 4,7,8,10,9
 """
 
 import argparse
@@ -34,12 +52,37 @@ from process_maven_spectra import load_pad_data
 
 MARS_RADIUS_KM = 3389.5
 LINE_COLORS = {"bx": "#cc4338", "by": "#2674c8", "bz": "#3a8a53", "bmag": "#6e5b4f"}
+REGION_ID_COLORS = {
+    0: "#6B7280",
+    1: "#E0A21A",
+    2: "#D65A4A",
+    3: "#2E7D5B",
+    4: "#3568A8",
+}
 PAD_CMAP = "turbo"
 FLUX_CMAP = "inferno"
 DEFAULT_OUTPUT_ROOT = Path("outputs") / "maven_data_panels"
 DEFAULT_PAD_ENERGY_BANDS_EV = ((20.0, 80.0), (111.0, 140.0))
 DEFAULT_PAD_ENERGY_BAND_EV = DEFAULT_PAD_ENERGY_BANDS_EV[0]
 STATIC_MASS_SPLIT_AMU = 1.5
+
+# Keep IDs stable: command lines and downstream pipelines may persist them.
+PANEL_CATALOG = {
+    1: {"key": "static_energy", "name": "STATIC ion energy", "height_ratio": 1.15},
+    2: {"key": "static_mass_light", "name": "STATIC light-ion mass", "height_ratio": 1.0},
+    3: {"key": "static_mass_heavy", "name": "STATIC heavy-ion mass", "height_ratio": 1.0},
+    4: {"key": "swe_energy", "name": "SWEA electron energy", "height_ratio": 1.15},
+    5: {"key": "mag_magnitude", "name": "MAG |B|", "height_ratio": 0.8},
+    6: {"key": "mag_components", "name": "MAG Bx/By/Bz MSO", "height_ratio": 0.8},
+    7: {"key": "swe_pad_band_1", "name": "SWEA PAD band 1", "height_ratio": 1.05},
+    8: {"key": "swe_pad_band_2", "name": "SWEA PAD band 2", "height_ratio": 1.05},
+    9: {"key": "coordinates", "name": "UTC and spacecraft coordinates", "height_ratio": 0.78},
+    10: {"key": "region_id", "name": "region_id classification", "height_ratio": 0.8},
+}
+DEFAULT_PANEL_IDS = tuple(range(1, 10))
+PAD_PANEL_BAND_INDEX = {7: 0, 8: 1}
+COORDINATE_PANEL_ID = 9
+REGION_ID_PANEL_ID = 10
 
 
 def log_step(message: str) -> None:
@@ -63,6 +106,49 @@ def nearest_sample_index(samples: list[dict], target_time: datetime) -> int:
         raise ValueError("The data-panel summary does not contain any samples.")
     sample_times = np.asarray([iso_to_unix(sample["target_time"]) for sample in samples], dtype=float)
     return int(np.argmin(np.abs(sample_times - target_time.timestamp())))
+
+
+def validate_panel_ids(values=None) -> tuple[int, ...]:
+    if values is None:
+        return DEFAULT_PANEL_IDS
+
+    parsed: list[int] = []
+    for value in values:
+        tokens = str(value).split(",")
+        for token in tokens:
+            token = token.strip()
+            if not token:
+                continue
+            try:
+                parsed.append(int(token))
+            except ValueError as exc:
+                raise ValueError(f"Invalid panel ID {token!r}; panel IDs must be integers.") from exc
+
+    if not parsed:
+        raise ValueError("At least one panel ID is required.")
+    unknown = sorted(set(parsed) - set(PANEL_CATALOG))
+    if unknown:
+        choices = ", ".join(str(panel_id) for panel_id in PANEL_CATALOG)
+        raise ValueError(f"Unknown panel ID(s) {unknown}; choose from: {choices}.")
+    duplicates = sorted({panel_id for panel_id in parsed if parsed.count(panel_id) > 1})
+    if duplicates:
+        raise ValueError(f"Duplicate panel ID(s) are not allowed: {duplicates}.")
+    ordered = [
+        panel_id
+        for panel_id in PANEL_CATALOG
+        if panel_id in parsed and panel_id != COORDINATE_PANEL_ID
+    ]
+    if COORDINATE_PANEL_ID in parsed:
+        ordered.append(COORDINATE_PANEL_ID)
+    return tuple(ordered)
+
+
+def panel_catalog_help() -> str:
+    entries = [
+        f"{panel_id}={metadata['name']}"
+        for panel_id, metadata in PANEL_CATALOG.items()
+    ]
+    return "; ".join(entries)
 
 
 def validate_energy_band(energy_band_eV: tuple[float, float]) -> tuple[float, float]:
@@ -620,6 +706,35 @@ def build_data_panel_summary_from_data(
     }
 
 
+def build_region_id_context(
+    start: datetime,
+    end: datetime,
+    data_root: Path,
+    cadence_seconds: float = 10.0,
+) -> dict:
+    # Imported lazily so existing panel combinations do not initialize the
+    # region classifier or its SWEA/STATIC feature extractors.
+    from region_id.classify_region_id import (
+        RegionClassifierConfig,
+        classify_interval,
+    )
+
+    rows, metadata = classify_interval(
+        start=start,
+        end=end,
+        data_root=data_root,
+        config=RegionClassifierConfig(cadence_seconds=float(cadence_seconds)),
+    )
+    return {
+        "times_unix": [float(row["time_unix"]) for row in rows],
+        "region_id": [int(row["region_id"]) for row in rows],
+        "region_name": [str(row["region_name"]) for row in rows],
+        "confidence": [float(row["confidence"]) for row in rows],
+        "reason": [str(row["reason"]) for row in rows],
+        "metadata": metadata,
+    }
+
+
 def window_indices(times_unix, center_unix: float, window_seconds: float) -> np.ndarray:
     times = finite_array(times_unix)
     return np.where((times >= center_unix - window_seconds / 2.0) & (times <= center_unix + window_seconds / 2.0))[0]
@@ -840,6 +955,44 @@ def plot_line_panel(ax, times_unix, traces: list[tuple[str, str, np.ndarray]], t
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
 
 
+def plot_region_id_panel(ax, times_unix, region_ids) -> None:
+    times = finite_array(times_unix)
+    ids = np.asarray(region_ids, dtype=float)
+    count = min(times.size, ids.size)
+    if count == 0:
+        ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center", fontsize=18)
+        ax.set_ylabel("region_id", fontsize=18)
+        return
+
+    times = times[:count]
+    ids = ids[:count]
+    valid = np.isfinite(times) & np.isfinite(ids)
+    if not np.any(valid):
+        ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center", fontsize=18)
+        ax.set_ylabel("region_id", fontsize=18)
+        return
+
+    times = times[valid]
+    ids = ids[valid].astype(int)
+    x = [datetime.fromtimestamp(float(value), tz=timezone.utc) for value in times]
+    ax.step(x, ids, where="mid", color="#252A31", linewidth=1.0)
+    for region_id, color in REGION_ID_COLORS.items():
+        selected = ids == region_id
+        if np.any(selected):
+            ax.scatter(
+                np.asarray(x, dtype=object)[selected],
+                ids[selected],
+                s=12,
+                color=color,
+                edgecolors="none",
+                zorder=3,
+            )
+    ax.set_ylabel("region_id", fontsize=18)
+    ax.set_yticks(list(REGION_ID_COLORS))
+    ax.set_ylim(-0.45, 4.45)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+
+
 def mark_target_time(ax, target_unix: float) -> None:
     ax.axvline(
         mdates.date2num(datetime.fromtimestamp(float(target_unix), tz=timezone.utc)),
@@ -848,6 +1001,23 @@ def mark_target_time(ax, target_unix: float) -> None:
         linewidth=1.0,
         alpha=0.9,
         zorder=10,
+    )
+
+
+def mark_panel_id(ax, panel_id: int) -> None:
+    is_coordinate_panel = panel_id == COORDINATE_PANEL_ID
+    ax.text(
+        0.994 if is_coordinate_panel else 0.006,
+        0.96,
+        f"[{panel_id}]",
+        transform=ax.transAxes,
+        ha="right" if is_coordinate_panel else "left",
+        va="top",
+        fontsize=14,
+        fontweight="bold",
+        color="#20242a",
+        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.78, "pad": 1.5},
+        zorder=20,
     )
 
 
@@ -942,12 +1112,21 @@ def plot_data_panels(
     output_path: Path,
     window_minutes: float = 20.0,
     pad_energy_bands_eV: tuple[tuple[float, float], ...] = DEFAULT_PAD_ENERGY_BANDS_EV,
-    figure_size: tuple[float, float] = (16.0, 20.0),
+    figure_size: tuple[float, float] | None = None,
     center_on_target_time: bool = False,
+    panel_ids: tuple[int, ...] = DEFAULT_PANEL_IDS,
 ) -> dict:
+    panel_ids = validate_panel_ids(panel_ids)
     pad_energy_bands_eV = validate_energy_bands(pad_energy_bands_eV)
-    if len(pad_energy_bands_eV) < 2:
-        raise ValueError("At least two PAD energy bands are required for the two SWE PAD panels.")
+    required_pad_bands = max(
+        (PAD_PANEL_BAND_INDEX[panel_id] + 1 for panel_id in panel_ids if panel_id in PAD_PANEL_BAND_INDEX),
+        default=0,
+    )
+    if len(pad_energy_bands_eV) < required_pad_bands:
+        raise ValueError(
+            f"Selected panels require at least {required_pad_bands} PAD energy band(s), "
+            f"but {len(pad_energy_bands_eV)} were provided."
+        )
     samples = summary.get("samples", [])
     selected_index = nearest_sample_index(samples, target_time)
     selected = samples[selected_index]
@@ -967,43 +1146,36 @@ def plot_data_panels(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    selected_height = sum(float(PANEL_CATALOG[panel_id]["height_ratio"]) for panel_id in panel_ids)
+    default_height = sum(float(PANEL_CATALOG[panel_id]["height_ratio"]) for panel_id in DEFAULT_PANEL_IDS)
+    if figure_size is None:
+        figure_size = (16.0, max(3.5, 20.0 * selected_height / default_height))
     fig = plt.figure(figsize=figure_size)
     grid = fig.add_gridspec(
-        9,
-        2,
-        height_ratios=[1.15, 1.0, 1.0, 1.15, 0.8, 0.8, 1.05, 1.05, 0.78],
+        len(panel_ids),
+        1,
+        height_ratios=[
+            float(PANEL_CATALOG[panel_id]["height_ratio"])
+            for panel_id in panel_ids
+        ],
         hspace=0,
-        wspace=0.10,
     )
 
-    ax_static_energy = fig.add_subplot(grid[0, :])
-    ax_static_mass_light = fig.add_subplot(grid[1, :], sharex=ax_static_energy)
-    ax_static_mass_heavy = fig.add_subplot(grid[2, :], sharex=ax_static_energy)
-    ax_swe_energy = fig.add_subplot(grid[3, :], sharex=ax_static_energy)
-    ax_bmag = fig.add_subplot(grid[4, :], sharex=ax_static_energy)
-    ax_bvec = fig.add_subplot(grid[5, :], sharex=ax_static_energy)
-    ax_pad_primary = fig.add_subplot(grid[6, :], sharex=ax_static_energy)
-    ax_pad_secondary = fig.add_subplot(grid[7, :], sharex=ax_static_energy)
-    ax_annotation = fig.add_subplot(grid[8, :], sharex=ax_static_energy)
-    axes_flat = np.asarray(
-        [
-            ax_static_energy,
-            ax_static_mass_light,
-            ax_static_mass_heavy,
-            ax_swe_energy,
-            ax_bmag,
-            ax_bvec,
-            ax_pad_primary,
-            ax_pad_secondary,
-            ax_annotation,
-        ],
-        dtype=object,
-    )
+    axes_by_id = {}
+    first_axis = None
+    for row_index, panel_id in enumerate(panel_ids):
+        axis = fig.add_subplot(
+            grid[row_index, 0],
+            sharex=first_axis if first_axis is not None else None,
+        )
+        axes_by_id[panel_id] = axis
+        if first_axis is None:
+            first_axis = axis
 
     # Fixed layout. Do not use constrained_layout=True or tight_layout().
     # right is kept smaller to reserve a fixed colorbar column.
     fig.subplots_adjust(
-        left=0.125,
+        left=0.16,
         right=0.86,
         top=0.985,
         bottom=0.04,
@@ -1034,32 +1206,33 @@ def plot_data_panels(
     static_energy_by_time = [energy_values_by_time_all[i] for i in static_indices] if energy_values_by_time_all else []
     static_energy_axis_by_time = [energy_axis_by_time_all[i] for i in static_indices] if energy_axis_by_time_all else []
 
-    if static_energy_by_time and static_energy_axis_by_time:
-        static_energy_norm_values = np.concatenate(
-            [np.asarray(row, dtype=float).reshape(-1) for row in static_energy_by_time]
-        )
-        mesh = plot_variable_heatmap(
-            axes_flat[0],
-            static_energy_by_time,
-            static_times,
-            static_energy_axis_by_time,
-            "",
-            "STATIC Energy\n(eV)",
-            log_y=True,
-            norm=positive_log_norm(static_energy_norm_values),
-        )
-    else:
-        mesh = plot_heatmap(
-            axes_flat[0],
-            static_energy_matrix,
-            static_times,
-            static.get("energy_eV", []),
-            "",
-            "STATIC Energy\n(eV)",
-            log_y=True,
-            norm=positive_log_norm(static_energy_matrix),
-        )
-    add_panel_colorbar(fig, axes_flat[0], mesh, label="eflux", fontsize=cbar_fs)
+    if 1 in axes_by_id:
+        if static_energy_by_time and static_energy_axis_by_time:
+            static_energy_norm_values = np.concatenate(
+                [np.asarray(row, dtype=float).reshape(-1) for row in static_energy_by_time]
+            )
+            mesh = plot_variable_heatmap(
+                axes_by_id[1],
+                static_energy_by_time,
+                static_times,
+                static_energy_axis_by_time,
+                "",
+                "STATIC Energy\n(eV)",
+                log_y=True,
+                norm=positive_log_norm(static_energy_norm_values),
+            )
+        else:
+            mesh = plot_heatmap(
+                axes_by_id[1],
+                static_energy_matrix,
+                static_times,
+                static.get("energy_eV", []),
+                "",
+                "STATIC Energy\n(eV)",
+                log_y=True,
+                norm=positive_log_norm(static_energy_matrix),
+            )
+        add_panel_colorbar(fig, axes_by_id[1], mesh, label="eflux", fontsize=cbar_fs)
 
     mass_light_all = np.asarray(static.get("mass_eflux_0_1p5", []), dtype=float)
     mass_heavy_all = np.asarray(static.get("mass_eflux_gt_1p5", []), dtype=float)
@@ -1093,53 +1266,55 @@ def plot_data_panels(
         )
     )
 
-    if mass_light_by_time and mass_light_axis_by_time:
-        mesh = plot_variable_heatmap(
-            axes_flat[1],
-            mass_light_by_time,
-            static_times,
-            mass_light_axis_by_time,
-            "",
-            f"STATIC Mass \n0-{STATIC_MASS_SPLIT_AMU:g} amu",
-            norm=mass_norm,
-        )
-    else:
-        mesh = plot_heatmap(
-            axes_flat[1],
-            mass_light_matrix,
-            static_times,
-            static.get("mass_amu_0_1p5", []),
-            "",
-            f"STATIC Mass \n0-{STATIC_MASS_SPLIT_AMU:g} amu",
-            norm=mass_norm,
-        )
-    axes_flat[1].set_ylim(0.5, STATIC_MASS_SPLIT_AMU)
-    axes_flat[1].set_yscale("log")
-    add_panel_colorbar(fig, axes_flat[1], mesh, label="eflux", fontsize=cbar_fs)
+    if 2 in axes_by_id:
+        if mass_light_by_time and mass_light_axis_by_time:
+            mesh = plot_variable_heatmap(
+                axes_by_id[2],
+                mass_light_by_time,
+                static_times,
+                mass_light_axis_by_time,
+                "",
+                f"STATIC Mass \n0-{STATIC_MASS_SPLIT_AMU:g} amu",
+                norm=mass_norm,
+            )
+        else:
+            mesh = plot_heatmap(
+                axes_by_id[2],
+                mass_light_matrix,
+                static_times,
+                static.get("mass_amu_0_1p5", []),
+                "",
+                f"STATIC Mass \n0-{STATIC_MASS_SPLIT_AMU:g} amu",
+                norm=mass_norm,
+            )
+        axes_by_id[2].set_ylim(0.5, STATIC_MASS_SPLIT_AMU)
+        axes_by_id[2].set_yscale("log")
+        add_panel_colorbar(fig, axes_by_id[2], mesh, label="eflux", fontsize=cbar_fs)
 
-    if mass_heavy_by_time and mass_heavy_axis_by_time:
-        mesh = plot_variable_heatmap(
-            axes_flat[2],
-            mass_heavy_by_time,
-            static_times,
-            mass_heavy_axis_by_time,
-            "",
-            f"STATIC Mass \n> {STATIC_MASS_SPLIT_AMU:g} amu",
-            norm=mass_norm,
-        )
-    else:
-        mesh = plot_heatmap(
-            axes_flat[2],
-            mass_heavy_matrix,
-            static_times,
-            static.get("mass_amu_gt_1p5", []),
-            "",
-            f"STATIC Mass \n> {STATIC_MASS_SPLIT_AMU:g} amu",
-            norm=mass_norm,
-        )
-    axes_flat[2].set_ylim(bottom=STATIC_MASS_SPLIT_AMU)
-    axes_flat[2].set_yscale("log")
-    add_panel_colorbar(fig, axes_flat[2], mesh, label="eflux", fontsize=cbar_fs)
+    if 3 in axes_by_id:
+        if mass_heavy_by_time and mass_heavy_axis_by_time:
+            mesh = plot_variable_heatmap(
+                axes_by_id[3],
+                mass_heavy_by_time,
+                static_times,
+                mass_heavy_axis_by_time,
+                "",
+                f"STATIC Mass \n> {STATIC_MASS_SPLIT_AMU:g} amu",
+                norm=mass_norm,
+            )
+        else:
+            mesh = plot_heatmap(
+                axes_by_id[3],
+                mass_heavy_matrix,
+                static_times,
+                static.get("mass_amu_gt_1p5", []),
+                "",
+                f"STATIC Mass \n> {STATIC_MASS_SPLIT_AMU:g} amu",
+                norm=mass_norm,
+            )
+        axes_by_id[3].set_ylim(bottom=STATIC_MASS_SPLIT_AMU)
+        axes_by_id[3].set_yscale("log")
+        add_panel_colorbar(fig, axes_by_id[3], mesh, label="eflux", fontsize=cbar_fs)
 
     swe = overview.get("swe") or {}
     swe_indices = window_indices(swe.get("times_unix"), center_unix, window_seconds)
@@ -1156,18 +1331,19 @@ def plot_data_panels(
         else []
     )
 
-    mesh = plot_heatmap(
-        axes_flat[3],
-        electron_energy_matrix,
-        swe_times,
-        swe.get("energy_eV", []),
-        "",
-        "SWE Electron\nEnergy (eV)",
-        log_y=True,
-        norm=LogNorm(vmin=1e3, vmax=1e9),
-        cmap=FLUX_CMAP,
-    )
-    add_panel_colorbar(fig, axes_flat[3], mesh, label="eflux", fontsize=cbar_fs)
+    if 4 in axes_by_id:
+        mesh = plot_heatmap(
+            axes_by_id[4],
+            electron_energy_matrix,
+            swe_times,
+            swe.get("energy_eV", []),
+            "",
+            "SWE Electron\nEnergy (eV)",
+            log_y=True,
+            norm=LogNorm(vmin=1e3, vmax=1e9),
+            cmap=FLUX_CMAP,
+        )
+        add_panel_colorbar(fig, axes_by_id[4], mesh, label="eflux", fontsize=cbar_fs)
 
     mag = overview.get("mag") or {}
     mag_indices = window_indices(mag.get("times_unix"), center_unix, window_seconds)
@@ -1178,50 +1354,79 @@ def plot_data_panels(
         else []
     )
 
-    plot_line_panel(
-        axes_flat[4],
-        mag_times,
-        [
-            (
-                "|B|",
-                LINE_COLORS["bmag"],
-                np.asarray(mag.get("bmag_nT", []), dtype=float)[mag_indices],
-            )
-        ],
-        "",
-        "|B|\n(nT)",
-        y_range=(0.0, 50.0),
-    )
+    if 5 in axes_by_id:
+        plot_line_panel(
+            axes_by_id[5],
+            mag_times,
+            [
+                (
+                    "|B|",
+                    LINE_COLORS["bmag"],
+                    np.asarray(mag.get("bmag_nT", []), dtype=float)[mag_indices],
+                )
+            ],
+            "",
+            "|B|\n(nT)",
+            y_range=(0.0, 50.0),
+        )
 
-    plot_line_panel(
-        axes_flat[5],
-        mag_times,
-        [
-            (
-                "Bx",
-                LINE_COLORS["bx"],
-                np.asarray(mag.get("bx_nT", []), dtype=float)[mag_indices],
-            ),
-            (
-                "By",
-                LINE_COLORS["by"],
-                np.asarray(mag.get("by_nT", []), dtype=float)[mag_indices],
-            ),
-            (
-                "Bz",
-                LINE_COLORS["bz"],
-                np.asarray(mag.get("bz_nT", []), dtype=float)[mag_indices],
-            ),
-        ]
-        if len(mag_indices)
-        else [],
-        "",
-        "B_MSO\n(nT)",
-        y_range=(-50.0, 50.0),
+    if 6 in axes_by_id:
+        plot_line_panel(
+            axes_by_id[6],
+            mag_times,
+            [
+                (
+                    "Bx",
+                    LINE_COLORS["bx"],
+                    np.asarray(mag.get("bx_nT", []), dtype=float)[mag_indices],
+                ),
+                (
+                    "By",
+                    LINE_COLORS["by"],
+                    np.asarray(mag.get("by_nT", []), dtype=float)[mag_indices],
+                ),
+                (
+                    "Bz",
+                    LINE_COLORS["bz"],
+                    np.asarray(mag.get("bz_nT", []), dtype=float)[mag_indices],
+                ),
+            ]
+            if len(mag_indices)
+            else [],
+            "",
+            "B_MSO\n(nT)",
+            y_range=(-50.0, 50.0),
+        )
+
+    region = overview.get("region_id") or {}
+    region_indices = window_indices(
+        region.get("times_unix"),
+        center_unix,
+        window_seconds,
     )
+    if REGION_ID_PANEL_ID in axes_by_id:
+        region_times = (
+            np.asarray(region.get("times_unix", []), dtype=float)[region_indices]
+            if len(region_indices)
+            else []
+        )
+        region_values = (
+            np.asarray(region.get("region_id", []), dtype=float)[region_indices]
+            if len(region_indices)
+            else []
+        )
+        plot_region_id_panel(
+            axes_by_id[REGION_ID_PANEL_ID],
+            region_times,
+            region_values,
+        )
 
     resolved_pad_bands = []
-    for pad_axis_index, band_index in enumerate(range(2), start=6):
+    resolved_pad_panels = {}
+    for panel_id in (7, 8):
+        if panel_id not in axes_by_id:
+            continue
+        band_index = PAD_PANEL_BAND_INDEX[panel_id]
         pad_all, resolved_pad_band_eV = resolve_pad_panel_data(swe, band_index, pad_energy_bands_eV)
         pad_matrix = pad_all[swe_indices] if len(swe_indices) and pad_all.size else []
         pad_bands = swe.get("pad_bands") or []
@@ -1231,7 +1436,7 @@ def plot_data_panels(
             else swe.get("pitch_deg", [])
         )
         mesh = plot_heatmap(
-            axes_flat[pad_axis_index],
+            axes_by_id[panel_id],
             pad_matrix,
             swe_times,
             pad_pitch,
@@ -1240,31 +1445,46 @@ def plot_data_panels(
             norm=positive_log_norm(pad_matrix),
             cmap=PAD_CMAP,
         )
-        add_panel_colorbar(fig, axes_flat[pad_axis_index], mesh, label="eflux", fontsize=cbar_fs)
+        add_panel_colorbar(fig, axes_by_id[panel_id], mesh, label="eflux", fontsize=cbar_fs)
         resolved_pad_bands.append(resolved_pad_band_eV)
+        resolved_pad_panels[str(panel_id)] = list(resolved_pad_band_eV)
 
-    draw_bottom_coordinate_axis(
-        axes_flat[8],
-        mag,
-        center_unix - window_seconds / 2.0,
-        center_unix + window_seconds / 2.0,
-    )
+    if COORDINATE_PANEL_ID in axes_by_id:
+        draw_bottom_coordinate_axis(
+            axes_by_id[COORDINATE_PANEL_ID],
+            mag,
+            center_unix - window_seconds / 2.0,
+            center_unix + window_seconds / 2.0,
+        )
 
-    for ax in axes_flat[:8]:
+    data_panel_ids = [
+        panel_id for panel_id in panel_ids if panel_id != COORDINATE_PANEL_ID
+    ]
+    for panel_id in data_panel_ids:
+        ax = axes_by_id[panel_id]
         ax.set_xlim(window_start, window_end)
         mark_target_time(ax, target_unix)
         ax.grid(True, linestyle=":", alpha=0.25)
         ax.tick_params(axis="both", labelsize=tick_fs)
         ax.yaxis.label.set_size(label_fs)
 
-    for ax in axes_flat[:8]:
-        ax.tick_params(labelbottom=False)
+    if COORDINATE_PANEL_ID in panel_ids:
+        for panel_id in data_panel_ids:
+            axes_by_id[panel_id].tick_params(labelbottom=False)
+    elif data_panel_ids:
+        for panel_id in data_panel_ids[:-1]:
+            axes_by_id[panel_id].tick_params(labelbottom=False)
+        axes_by_id[data_panel_ids[-1]].set_xlabel("Time (UTC)", fontsize=label_fs)
 
-    for ax in axes_flat[:8]:
+    for panel_id in data_panel_ids:
+        ax = axes_by_id[panel_id]
         legend = ax.get_legend()
         if legend is not None:
             for text in legend.get_texts():
                 text.set_fontsize(legend_fs)
+
+    for panel_id in panel_ids:
+        mark_panel_id(axes_by_id[panel_id], panel_id)
 
     # No figure title.
     # Do not call fig.suptitle(...)
@@ -1275,7 +1495,10 @@ def plot_data_panels(
     return {
         "selected_index": selected_index,
         "selected_time": selected.get("target_time"),
+        "panel_ids": list(panel_ids),
+        "panel_names": [PANEL_CATALOG[panel_id]["name"] for panel_id in panel_ids],
         "pad_energy_bands_eV": [list(band) for band in resolved_pad_bands],
+        "pad_energy_bands_by_panel": resolved_pad_panels,
         "output_path": str(output_path),
     }
 
@@ -1292,6 +1515,23 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time", required=True, help="UTC target time.")
     parser.add_argument("--window-minutes", type=float, default=20.0)
     parser.add_argument("--step-seconds", type=int, default=60, help="Cadence for altitude samples when reading local data.")
+    parser.add_argument(
+        "--region-id-cadence-seconds",
+        type=float,
+        default=10.0,
+        help="Classification cadence used only when panel 10 is selected.",
+    )
+    parser.add_argument(
+        "--panels",
+        "--panel-ids",
+        nargs="+",
+        default=[str(panel_id) for panel_id in DEFAULT_PANEL_IDS],
+        metavar="ID",
+        help=(
+            "Panel IDs to include. Space-separated and comma-separated forms are "
+            f"accepted; output follows catalog order. Catalog: {panel_catalog_help()}"
+        ),
+    )
     parser.add_argument(
         "--pad-energy-bands",
         "--pad-energy-band",
@@ -1319,13 +1559,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_argument_parser().parse_args()
     target_time = parse_iso_timestamp(args.time)
+    panel_ids = validate_panel_ids(args.panels)
     pad_energy_bands_eV = validate_energy_bands(args.pad_energy_bands)
+    data_root = Path(args.data_root).expanduser().resolve()
     if args.summary_json:
         summary_path = Path(args.summary_json).expanduser().resolve()
         log_step(f"Loading summary context: {summary_path}")
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
     else:
-        data_root = Path(args.data_root).expanduser().resolve()
         log_step(f"Building panel context directly from local data: {data_root}")
         summary = build_data_panel_summary_from_data(
             target_time=target_time,
@@ -1336,11 +1577,30 @@ def main() -> None:
             pad_energy_bands_eV=pad_energy_bands_eV,
         )
 
+    if REGION_ID_PANEL_ID in panel_ids:
+        selected_index = nearest_sample_index(summary.get("samples", []), target_time)
+        center_time = parse_iso_timestamp(
+            summary["samples"][selected_index]["target_time"]
+        )
+        half_window = timedelta(minutes=args.window_minutes / 2.0)
+        log_step(
+            "Classifying region_id for panel 10: "
+            f"{(center_time - half_window).isoformat()} to "
+            f"{(center_time + half_window).isoformat()}"
+        )
+        summary.setdefault("context_overview", {})["region_id"] = build_region_id_context(
+            start=center_time - half_window,
+            end=center_time + half_window,
+            data_root=data_root,
+            cadence_seconds=args.region_id_cadence_seconds,
+        )
+
     output_path = (
         Path(args.output).expanduser().resolve()
         if args.output
         else default_event_output_path(Path(args.output_root).expanduser().resolve(), target_time)
     )
+    log_step(f"Selected panels: {', '.join(str(panel_id) for panel_id in panel_ids)}")
     log_step(f"Writing data panels to: {output_path}")
     result = plot_data_panels(
         summary=summary,
@@ -1348,6 +1608,7 @@ def main() -> None:
         output_path=output_path,
         window_minutes=args.window_minutes,
         pad_energy_bands_eV=pad_energy_bands_eV,
+        panel_ids=panel_ids,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
 

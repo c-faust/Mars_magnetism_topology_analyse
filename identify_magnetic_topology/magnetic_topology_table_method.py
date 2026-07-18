@@ -50,6 +50,13 @@ from identify_magnetic_topology.shape_parameter_method import (
     plot_shape_parameters,
     write_shape_csv,
 )
+from region_id.classify_region_id import (
+    RegionClassifierConfig,
+    classify_interval as classify_region_interval,
+    plot_region_ids,
+    write_region_csv,
+    write_summary_json as write_region_summary_json,
+)
 
 
 DEFAULT_OUTPUT_ROOT = Path("outputs") / "identify_magnetic_topology" / "magnetic_topology_based_on_Xu2019"
@@ -57,6 +64,8 @@ DEFAULT_RATIO_ENERGY_RANGE_EV = (35.0, 60.0)
 DEFAULT_LOSS_CONE_PAD_SCORE_THRESHOLD = -3.0
 DEFAULT_ELECTRON_VOID_ENERGY_EV = 40.0
 DEFAULT_ELECTRON_VOID_FLUX_THRESHOLD = 1.0e5
+DEFAULT_MAX_REGION_ID_DELTA_SECONDS = 2.0
+DEFAULT_REGION_ID_BOUNDARY_MARGIN_KM = 100.0
 
 
 def format_unix_time(value: float) -> str:
@@ -206,6 +215,36 @@ def nearest_pad_row(pad_df: pd.DataFrame, time_unix: float, max_delta_seconds: f
     return pad_df.iloc[index], delta
 
 
+def nearest_region_row(
+    region_df: pd.DataFrame | None,
+    time_unix: float,
+    max_delta_seconds: float,
+) -> tuple[pd.Series | None, float]:
+    if region_df is None or region_df.empty or not np.isfinite(time_unix):
+        return None, float("nan")
+    times = np.asarray(region_df["time_unix"], dtype=float)
+    finite = np.isfinite(times)
+    if not np.any(finite):
+        return None, float("nan")
+    finite_indices = np.where(finite)[0]
+    sorted_times = times[finite]
+    insertion = int(np.searchsorted(sorted_times, time_unix, side="left"))
+    candidates = [
+        item
+        for item in (insertion - 1, insertion)
+        if 0 <= item < sorted_times.size
+    ]
+    sorted_index = min(
+        candidates,
+        key=lambda item: abs(float(sorted_times[item]) - time_unix),
+    )
+    index = int(finite_indices[sorted_index])
+    delta = abs(float(times[index]) - time_unix)
+    if delta > max_delta_seconds:
+        return None, delta
+    return region_df.iloc[index], delta
+
+
 def topology_from_table(
     away_shape_class: str,
     toward_shape_class: str,
@@ -254,7 +293,13 @@ def build_topology_dataframe(
     photoelectron_shape_threshold: float,
     max_pad_delta_seconds: float,
     loss_cone_pad_score_threshold: float,
+    region_df: pd.DataFrame | None = None,
+    max_region_delta_seconds: float = DEFAULT_MAX_REGION_ID_DELTA_SECONDS,
 ) -> pd.DataFrame:
+    if region_df is not None and not region_df.empty:
+        region_df = region_df.sort_values("time_unix", kind="stable").reset_index(
+            drop=True
+        )
     output_rows = []
     for row in shape_rows:
         sample_unix = finite_float(row.get("time_unix"))
@@ -294,14 +339,67 @@ def build_topology_dataframe(
             ratio,
             void,
         )
+        table_topology = topology
+        table_subcase = subcase
+        table_reason = reason
+
+        region_row, region_delta = nearest_region_row(
+            region_df,
+            sample_unix,
+            max_region_delta_seconds,
+        )
+        if region_row is None:
+            region_id_value = float("nan")
+            region_name = ""
+            region_time_utc = ""
+            region_confidence = float("nan")
+            region_reason = "missing_nearest_region_id"
+            region_geometry_only = False
+            region_valid = False
+        else:
+            raw_region_id = finite_float(region_row.get("region_id"))
+            region_id_value = (
+                int(raw_region_id) if np.isfinite(raw_region_id) else float("nan")
+            )
+            region_name = str(region_row.get("region_name", ""))
+            region_time_utc = str(region_row.get("time_utc", ""))
+            region_confidence = finite_float(region_row.get("confidence"))
+            region_reason = str(region_row.get("reason", ""))
+            region_geometry_only = bool(region_row.get("geometry_only", False))
+            region_valid = np.isfinite(raw_region_id)
+
+        if region_id_value in {0, 1}:
+            topology = "DP"
+            subcase = "7b"
+            reason = (
+                f"region_id={region_id_value} ({region_name}) is assigned "
+                "draped topology DP before the shape/PAD lookup table."
+            )
+            topology_source = "region_id_0_1_override"
+        else:
+            topology_source = "xu2019_shape_pad_table"
+
         output_rows.append(
             {
                 "time_unix": sample_unix,
                 "time_utc": str(row.get("time_utc", format_unix_time(sample_unix))),
                 "topology": topology,
+                "topology_label": "draped DP" if topology == "DP" else topology,
                 "topology_subcase": subcase,
                 "topology_reason": reason,
                 "valid_topology": topology != "unknown",
+                "topology_source": topology_source,
+                "table_topology": table_topology,
+                "table_topology_subcase": table_subcase,
+                "table_topology_reason": table_reason,
+                "region_id": region_id_value,
+                "region_name": region_name,
+                "region_id_time_utc": region_time_utc,
+                "region_id_delta_seconds": region_delta,
+                "region_id_confidence": region_confidence,
+                "region_id_reason": region_reason,
+                "region_id_geometry_only": region_geometry_only,
+                "region_id_valid": bool(region_valid),
                 "away_shape_class": away_shape,
                 "toward_shape_class": toward_shape,
                 "away_shape_parameter": away_shape_value,
@@ -416,6 +514,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=DEFAULT_ELECTRON_VOID_FLUX_THRESHOLD,
         help="Flux below this absolute threshold is classified as a superthermal electron void.",
     )
+    parser.add_argument(
+        "--region-id-boundary-margin-km",
+        type=float,
+        default=DEFAULT_REGION_ID_BOUNDARY_MARGIN_KM,
+        help="Bow-shock and MPB Unknown buffer used by the region_id classifier.",
+    )
+    parser.add_argument(
+        "--max-region-id-delta-seconds",
+        type=float,
+        default=DEFAULT_MAX_REGION_ID_DELTA_SECONDS,
+        help="Maximum allowed time difference when attaching region_id to a topology row.",
+    )
     return parser
 
 
@@ -458,6 +568,42 @@ def main() -> None:
         difference_mode=args.difference_mode,
         shape_energy_range_eV=shape_energy_range,
         spectral_smoothing_window_points=spectral_smoothing_points,
+    )
+
+    region_rows: list[dict] = []
+    region_metadata: dict = {}
+    region_target_times = [
+        finite_float(row.get("time_unix"))
+        for row in shape_rows
+        if np.isfinite(finite_float(row.get("time_unix")))
+    ]
+    if region_target_times:
+        region_rows, region_metadata = classify_region_interval(
+            start=start,
+            end=end,
+            data_root=data_root,
+            config=RegionClassifierConfig(
+                boundary_margin_km=float(args.region_id_boundary_margin_km)
+            ),
+            target_times_unix=region_target_times,
+        )
+    region_df = pd.DataFrame(region_rows)
+    region_dir = output_dir / "region_id"
+    region_csv = write_region_csv(
+        region_dir / "region_id_timeseries.csv",
+        region_rows,
+    )
+    region_summary = write_region_summary_json(
+        region_dir / "region_id_summary.json",
+        region_metadata,
+    )
+    region_plot = (
+        plot_region_ids(
+            region_dir / "region_id_timeseries.png",
+            region_rows,
+        )
+        if region_rows
+        else None
     )
 
     shape_dir = output_dir / "shape_parameter_method"
@@ -508,6 +654,8 @@ def main() -> None:
         photoelectron_shape_threshold=float(args.photoelectron_shape_threshold),
         max_pad_delta_seconds=float(args.max_pad_delta_seconds),
         loss_cone_pad_score_threshold=float(args.loss_cone_pad_score_threshold),
+        region_df=region_df,
+        max_region_delta_seconds=float(args.max_region_id_delta_seconds),
     )
 
     topology_csv = output_dir / "magnetic_topology_classification.csv"
@@ -533,11 +681,25 @@ def main() -> None:
             "enabled": spectral_smoothing_enabled,
             "window_points": spectral_smoothing_points,
         },
-        "lookup_table_note": "A=away, T=toward, LC=loss cone, Phe=photoelectron-like shape, SWe=solar-wind/backscattered-like shape. Region-ID-only DP case 7b is not applied because no region ID is computed here.",
+        "lookup_table_note": "A=away, T=toward, LC=loss cone, Phe=photoelectron-like shape, SWe=solar-wind/backscattered-like shape. region_id 0 or 1 overrides the shape/PAD result as draped DP case 7b.",
+        "region_id_rule": {
+            "override_region_ids": [0, 1],
+            "topology": "DP",
+            "topology_label": "draped DP",
+            "topology_subcase": "7b",
+            "boundary_margin_km": float(args.region_id_boundary_margin_km),
+            "max_delta_seconds": float(args.max_region_id_delta_seconds),
+            "metadata": region_metadata,
+        },
         "shape_skip_counts": shape_skip_counts,
         "rows": int(len(topology_df)),
         "valid_topology_rows": int(topology_df["valid_topology"].sum()) if not topology_df.empty else 0,
         "topology_counts": topology_df["topology"].value_counts(dropna=False).to_dict() if not topology_df.empty else {},
+        "region_id_override_rows": (
+            int((topology_df["topology_source"] == "region_id_0_1_override").sum())
+            if not topology_df.empty
+            else 0
+        ),
         "outputs": {
             "topology_csv": str(topology_csv),
             "topology_plot": str(topology_plot),
@@ -546,6 +708,9 @@ def main() -> None:
             "pad_csv": str(pad_csv),
             "pad_classification_plot": str(pad_class_plot),
             "pad_score_plot": str(pad_score_plot),
+            "region_id_csv": str(region_csv),
+            "region_id_plot": "" if region_plot is None else str(region_plot),
+            "region_id_summary": str(region_summary),
         },
     }
     summary_path = output_dir / "summary.json"
