@@ -5,7 +5,7 @@
 1. 判断磁场方向：磁场指向火星表面还是远离火星表面。
 2. 分别计算 shape parameter 与 PAD score。
 3. 调用 `region_id`，按相同的 shape 样本时间判断卫星所在区域。
-4. 先应用 `region_id=0/1 -> draped DP`，其他区域再按 Xu et al. 2019 表格融合 shape/PAD/flux ratio。
+4. 先应用 `region_id=1/2 -> draped DP`，其他区域再按 Xu et al. 2019 表格融合 shape/PAD/flux ratio。
 
 所有命令默认从仓库根目录运行：
 
@@ -30,7 +30,7 @@ A/T ratio = away_flux / toward_flux
 随后调用 `region_id` 并根据以下顺序输出磁场拓扑类型：
 
 ```text
-region_id == 0 or region_id == 1
+region_id == 1 or region_id == 2
 -> topology = DP
 -> topology_label = draped DP
 -> topology_subcase = 7b
@@ -160,7 +160,7 @@ Phe = photoelectron-like spectrum
 SWe = solar-wind/backscattered-like spectrum
 ```
 
-如果 `region_id` 为 0 或 1，即使 shape、PAD 或 ratio 信息不足，也会按
+如果 `region_id` 为 1 或 2，即使 shape、PAD 或 ratio 信息不足，也会按
 case 7b 输出 `draped DP`。其他 `region_id` 仍遵循原表格；信息不足时输出
 `unknown`，不会强行分类。
 

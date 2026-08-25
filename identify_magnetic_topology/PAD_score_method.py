@@ -504,8 +504,26 @@ def classify_full_pad(
             "diagnostics": diagnostics,
         }
 
-    low_mask = mask_range(pitch, bands.parallel_low)
-    high_mask = mask_range(pitch, bands.antiparallel_high)
+    # Xu et al. (2019), section 2.3.2, use the most field-aligned 10-degree
+    # interval available inside 0-30 and 150-180 degrees.  Keep the interval
+    # selection here (rather than averaging each full 30-degree band) so the
+    # public ``field_aligned_window_deg`` parameter controls the calculation.
+    low_mask, low_window_bounds, _ = field_aligned_mask(
+        pitch,
+        values,
+        errors,
+        bands.parallel_low,
+        side="low",
+        window_deg=field_aligned_window_deg,
+    )
+    high_mask, high_window_bounds, _ = field_aligned_mask(
+        pitch,
+        values,
+        errors,
+        bands.antiparallel_high,
+        side="high",
+        window_deg=field_aligned_window_deg,
+    )
     low_flux, low_sigma, low_count = bin_mean_with_error(values, errors, low_mask)
     high_flux, high_sigma, high_count = bin_mean_with_error(values, errors, high_mask)
     perp_flux, perp_sigma, perp_count, perp_method, perp_lower_pitch, perp_upper_pitch = perpendicular_flux_with_error(
@@ -543,13 +561,13 @@ def classify_full_pad(
             "coverage_low_pa": low_count,
             "coverage_high_pa": high_count,
             "coverage_perpendicular": perp_count,
-            "low_fa_window_low_deg": bands.parallel_low[0],
-            "low_fa_window_high_deg": bands.parallel_low[1],
-            "high_fa_window_low_deg": bands.antiparallel_high[0],
-            "high_fa_window_high_deg": bands.antiparallel_high[1],
+            "low_fa_window_low_deg": low_window_bounds[0],
+            "low_fa_window_high_deg": low_window_bounds[1],
+            "high_fa_window_low_deg": high_window_bounds[0],
+            "high_fa_window_high_deg": high_window_bounds[1],
             "low_fa_window_valid_count": low_count,
             "high_fa_window_valid_count": high_count,
-            "field_aligned_window_deg": float("nan"),
+            "field_aligned_window_deg": field_aligned_window_deg,
             "perpendicular_method": perp_method,
             "perpendicular_interp_lower_pitch_deg": perp_lower_pitch,
             "perpendicular_interp_upper_pitch_deg": perp_upper_pitch,
@@ -655,7 +673,7 @@ def pad_pitch_centers_for_group(pad_data: dict, time_indices: np.ndarray, select
 def classify_pad_timeseries(
     start: datetime,
     end: datetime,
-    data_root: Path = DEFAULT_DATA_ROOT,
+    data_root: Path | tuple[Path, ...] | list[Path] = DEFAULT_DATA_ROOT,
     energy_range_eV: tuple[float, float] = DEFAULT_ENERGY_RANGE_EV,
     energy_method: str = "mean",
     group_size: int = 4,

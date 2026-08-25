@@ -1,0 +1,615 @@
+MAVEN 磁场拓扑（magnetic topology）判别逻辑详细总结
+====================================================
+
+文档对应代码版本：2026-08-24 当前工作区实现
+核心程序：identify_magnetic_topology/magnetic_topology_table_method.py
+
+本文只总结“当前代码实际执行的规则”。物理解释用于帮助理解，但最终结果必须以
+程序中的数值条件和判别顺序为准。
+
+
+一、最终输出的 topology
+========================
+
+topology_id  topology  代码中的类型
+-----------  --------  ------------------------------------------
+0            unknown   信息缺失、条件冲突或没有表格规则匹配
+1            C-D       closed 类，双向 Phe 且 A/T 通量相对对称
+2            C-X       closed 类，双向或方向性证据显著不对称
+3            C-T       closed 类，toward/away 两端均有 loss cone
+4            C-V       closed/void 类，超热电子绝对通量耗尽
+5            O-D       open 类，单方向具有 Phe 连接证据
+6            O-N       open 类，双向均为 SWe，但 PAD 呈单端 loss cone
+7            DP        draped topology；包括表格 case 7a 和 region_id 覆盖 case 7b
+
+说明：代码没有进一步展开 D、X、T、V、N 每个字母的完整物理名称，因此本文不把
+这些字母强行解释成唯一术语。最严格、可复现的定义是后文列出的 shape、PAD、A/T
+ratio、void 和 region_id 条件。
+
+
+二、总体判别流程和优先级
+========================
+
+最终时间轴以 shape_parameter_method.py 产生的每个 shape 样本时间为基准。
+对每个时间点执行：
+
+1. 计算 toward/away shape parameter，并分别转成 Phe、SWe 或 unknown。
+2. 查找时间上最近的 PAD score 行；默认允许最大时间差 6 s。
+3. 使用 toward_pad_score、away_pad_score 重新判定 LC / No LC。
+4. 从 SWE PAD 原始数据计算 35-60 eV 的 A/T ratio。
+5. 从最接近 40 eV 的 SWE 能道计算 superthermal electron void。
+6. 按固定顺序调用 Xu2019 shape/PAD 表格规则，先得到 table_topology。
+7. 查找时间上最近的 region_id；默认允许最大时间差 2 s。
+8. 如果 region_id 为 1（Solar wind）或 2（Magnetosheath），最终 topology 无条件
+   覆盖为 DP case 7b；否则保留 table_topology。
+
+因此，最终优先级可以概括为：
+
+region_id 1/2 -> DP case 7b（最高最终优先级）
+其他 region_id -> 使用 shape/PAD 表格结果
+
+表格内部的优先级为：
+
+C-V void
+-> Phe/Phe 的 C-D 或 C-X case 2a
+-> 混合 shape 的 C-X case 2b/2c
+-> 双端 LC 的 C-T
+-> 混合 shape 的 O-D
+-> SWe/SWe 的 O-N 或 DP case 7a
+-> unknown
+
+代码会同时保存 table_topology 和最终 topology。因此即使最终被 region_id 覆盖为
+DP，仍可在 table_topology、table_topology_subcase、table_topology_reason 中查看
+覆盖前结果。
+
+
+三、toward / away 方向如何确定
+==============================
+
+数据：MAG sunstate 1-second（ss1s）的 MSO 磁场 B 和航天器位置矢量 R。
+
+程序计算：
+
+dot_b_r = B · R
+angle = arccos[(B · R) / (|B| |R|)]
+
+方向规则：
+
+angle > 90°：field_direction = toward_surface
+              parallel     -> toward
+              antiparallel -> away
+
+angle < 90°：field_direction = away_from_surface
+              antiparallel -> toward
+              parallel     -> away
+
+angle = 90°：field_direction = perpendicular
+              toward/away 无法定义，映射结果为 NaN
+
+shape 和 PAD 默认都允许匹配最近的 MAG 样本，最大时间差为 60 s。MAG 缺失、磁场或
+位置非法、或者超过时间容差时，toward/away 无法建立，相关 shape/PAD 通常变成
+unknown 或 invalid。
+
+
+四、shape parameter 及 Phe / SWe 判据
+=====================================
+
+4.1 输入和默认参数
+------------------
+
+输入：SWE svypad 定向电子能谱、MAG ss1s、可选 LPW mrgscpot。
+
+默认值：
+
+parallel pitch angle       = 0-30°
+antiparallel pitch angle   = 150-180°
+shape 能量范围             = 20-80 eV
+谱时间平滑窗口             = 5 个 SWE 样本（中心滑动 nanmean）
+difference_mode            = absolute
+LPW 最大时间差             = 60 s
+MAG 最大时间差             = 60 s
+Phe/SWe 阈值               = 1.0
+
+模板文件：
+
+obtain_the_template/combined_template/derivative_template_10_100eV.csv
+
+4.2 航天器电势修正
+------------------
+
+如果有合格 LPW 数据：
+
+corrected_energy_eV = measured_energy_eV - spacecraft_potential_V
+
+如果 LPW 缺失或超过 60 s：
+
+spacecraft_potential_V          = NaN
+lpw_available                   = False
+energy_correction_applied       = False
+energy_correction_potential_V   = 0
+
+程序不会因此停止，而是使用未平移的能量轴继续计算，并在 status 中加入
+missing_lpw_no_energy_correction。该结果仍可能产生有限 shape parameter，但应降低
+科学解释可信度，因为 Phe/SWe 分界可能受到能量轴偏移影响。
+
+4.3 shape parameter 的当前数学实现
+-----------------------------------
+
+1. 先对 parallel、antiparallel 定向通量做默认 5 样本中心平均。
+2. 保留能量和通量均有限、且 energy > 0、flux > 0 的能道。
+3. 能量升序排序并去除重复能量。
+4. 当前代码计算：
+
+   df_i = gradient[log10(flux_i)]
+
+   注意：这里的 np.gradient 没有显式传入 log10(energy) 间距，所以严格说是沿能道
+   索引的 log10(flux) 梯度，而不是显式的 dlogF/dlogE。
+
+5. 将 df 插值到模板能量网格，只使用 20-80 eV 且落在实测能量覆盖内的模板点。
+6. absolute 模式下：
+
+   shape_parameter = Σ |df_observed(E_j) - df_template(E_j)|
+
+7. 使用 MAG 将 parallel/antiparallel shape 映射为 toward/away shape。
+
+4.4 Phe / SWe 分类
+------------------
+
+对 toward 和 away 分别执行：
+
+shape parameter 为 NaN          -> unknown
+shape parameter <= 1.0          -> Phe
+shape parameter >  1.0          -> SWe
+
+Phe 表示谱形更接近项目使用的火星光电子模板，可作为该方向连接电离层光电子源的
+证据。SWe 表示谱形与该模板差异较大，代码将其作为 solar-wind/backscattered-like
+类型。Phe/SWe 是模板相似度分类，不等同于直接证明磁力线足点位置。
+
+
+五、PAD score、loss cone 和 No LC
+=================================
+
+5.1 PAD 预处理
+--------------
+
+默认能量范围：100-300 eV。
+默认 energy_method：mean，即先对所选能道求平均。
+默认 group_size：4，即连续 4 个 PAD 样本相加；时间取 4 个样本时间的平均。
+不足 4 个的尾组默认丢弃。
+
+如果 CDF 中存在三维 counts：
+
+sigma_flux = |diff_en_fluxes| / sqrt(counts)
+
+counts <= 0 或非有限时 sigma 为 NaN。如果没有可用 counts，则尝试读取 CDF 中的
+variance 或 sigma/uncertainty/error 变量。不同能道、时间和 pitch bin 的 sigma
+按误差传播规则合成。
+
+5.2 代表性通量
+--------------
+
+低 pitch-angle 一侧：在 0-30° 内选择“最靠近 0°且覆盖最好”的可用 10°窗口。
+高 pitch-angle 一侧：在 150-180° 内选择“最靠近 180°且覆盖最好”的可用 10°窗口。
+
+这意味着当前实现不是直接平均整个 0-30°或150-180°区间。
+
+垂直通量 f_perp：
+
+1. 优先平均 85-95° 内的有效 bin；
+2. 如果该范围无有效 bin，则从 75-85° 中最靠近 85°的点和 95-105°中最靠近
+   95°的点线性插值到 90°；
+3. 任一侧缺失则 f_perp 无效。
+
+pitch-bin 平均通量与不确定度：
+
+f_mean     = mean(f_i)
+sigma_mean = sqrt(Σ sigma_i²) / N
+
+5.3 PAD score
+-------------
+
+对低角端和高角端分别计算：
+
+PAD score = (f_FA - f_perp) / sqrt(sigma_FA² + sigma_perp²)
+
+score 的符号含义：
+
+score 显著为负：场向通量低于垂直通量，支持 loss cone
+score 接近 0：近似各向同性
+score 显著为正：场向通量增强，支持 beam
+
+PAD_score_method.py 自身用于输出图和 pad_shape 的默认分类是：
+
+score >  +2 -> beam
+score <  -2 -> loss_cone
+-2 <= score <= +2 -> isotropic
+
+但最终 magnetic_topology_table_method.py 不直接使用上述文字标签。最终表格重新读取
+toward_pad_score 和 away_pad_score，按另一个更严格阈值分类：
+
+score < -3       -> LC
+有限 score >= -3 -> No LC
+score 为 NaN     -> unknown
+
+因此：
+
+PAD 子程序中的 loss_cone（例如 score=-2.5）在最终 topology 表里会成为 No LC；
+PAD 子程序中的 beam 和 isotropic 在最终 topology 表里都合并为 No LC。
+
+5.4 toward / away PAD 映射
+-------------------------
+
+field_direction = toward_surface 时：低角端为 toward，高角端为 away。
+field_direction = away_from_surface 时：高角端为 toward，低角端为 away。
+
+5.5 PAD 子程序内部的 electron depletion
+----------------------------------------
+
+PAD 子程序还检查至少 6 个有效 pitch bin 是否全部满足：
+
+flux_i <= 2 * sigma_i
+
+满足时 pad_shape = electron_depletion，内部 topology = closed_like。
+
+重要：最终 C-V 并不直接使用这个 depletion_flag。最终 C-V 使用下一节所述的约 40 eV
+单能道绝对通量条件。二者不能混为同一判据。
+
+
+六、A/T ratio 和最终 C-V void
+=============================
+
+6.1 A/T ratio
+-------------
+
+对 shape 行对应的 SWE PAD 样本重新计算 parallel 和 antiparallel 定向谱，在
+35-60 eV 能量范围内分别取有效能道平均通量。再使用 MAG 方向映射为 toward 和
+away：
+
+A/T ratio = away_flux_35_60eV / toward_flux_35_60eV
+
+只有 toward_flux 有限且 >0、away_flux 有限时 ratio 才有效。
+
+6.2 superthermal electron void
+------------------------------
+
+程序选择 SWE 能量轴上最接近 40 eV 的实际能道，对该时间点所有 pitch-angle flux
+求 nanmean：
+
+flux_near_40eV = mean_pitch(flux[pitch, nearest_energy_channel])
+
+默认规则：
+
+flux_near_40eV < 1.0e5 -> void = True
+flux_near_40eV >= 1.0e5 或 NaN -> void = False
+
+这是绝对阈值且使用单个最近能道；当前没有要求最少有效 pitch bin。应结合输出中的
+electron_void_actual_energy_eV、electron_void_flux、ratio_status 检查数据质量。
+
+
+七、每一种最终 topology 的精确判别逻辑
+========================================
+
+以下 A 表示 away，T 表示 toward。
+
+7.1 C-V，topology_id=4，subcase=4
+--------------------------------
+
+条件：
+
+void == True
+
+也就是最接近 40 eV 的 pitch-angle 平均通量严格小于 1e5。
+
+判别优先级：C-V 是 Xu2019 表格内部第一优先级。只要 void=True，shape、PAD 和
+A/T ratio 都不会再参与表格分类。
+
+例外：如果匹配到 region_id=1 或 2，最终结果仍会被最高层覆盖成 DP case 7b；此时
+table_topology 仍保存 C-V。
+
+7.2 C-D，topology_id=1，subcase=1
+--------------------------------
+
+全部条件：
+
+void == False
+away_shape_class   == Phe
+toward_shape_class == Phe
+A/T ratio 有限
+0.2 < A/T ratio < 5.0
+
+边界是严格不等式。ratio 恰好等于 0.2 或 5.0 时既不进入 C-D，也不进入 C-X case
+2a，最终通常为 unknown。
+
+逻辑含义：两个方向的谱形均具有 Phe 特征，并且 35-60 eV 双向通量没有超过 5 倍的
+强不对称。
+
+7.3 C-X，topology_id=2
+-----------------------
+
+C-X 有三个子情形，按 2a、2b、2c 顺序检查。
+
+case 2a：
+
+void == False
+A shape == Phe
+T shape == Phe
+A/T ratio > 5.0 或 A/T ratio < 0.2
+
+表示双方向均为 Phe，但通量高度不对称。
+
+case 2b：
+
+A shape == Phe
+T shape == SWe
+A PAD == No LC
+T PAD == LC
+
+case 2c：
+
+A shape == SWe
+T shape == Phe
+A PAD == LC
+T PAD == No LC
+
+2b/2c 在双端 LC 的 C-T 规则之前检查，因此若某组合同时满足更早的 C-X 精确条件，
+C-X 优先。
+
+7.4 C-T，topology_id=3，subcase=3
+--------------------------------
+
+条件：
+
+A PAD == LC
+T PAD == LC
+
+shape 类型不作限制，A/T ratio 也不作限制。它只会在 void=False 且没有命中前面的
+Phe/Phe ratio 或 C-X 2b/2c 后执行。
+
+7.5 O-D，topology_id=5
+-----------------------
+
+case 5a：
+
+A shape == Phe
+T shape == SWe
+T PAD == No LC
+
+away PAD 不作限制。
+
+case 5b：
+
+A shape == SWe
+T shape == Phe
+A PAD == No LC
+
+toward PAD 不作限制。
+
+逻辑含义：只有一个方向显示 Phe 谱形，另一个方向为 SWe；No LC 条件用于确定开放
+方向组合。
+
+7.6 O-N，topology_id=6，subcase=6
+--------------------------------
+
+全部条件：
+
+A shape == SWe
+T shape == SWe
+A PAD == LC
+T PAD == No LC
+
+代码没有实现其镜像组合“A No LC、T LC”作为 O-N；该镜像若不满足其他更早规则会
+进入 unknown。
+
+7.7 DP，topology_id=7
+---------------------
+
+case 7a（Xu2019 表格路径）：
+
+A shape == SWe
+T shape == SWe
+A PAD == No LC
+
+toward PAD 不作限制，可以是 LC、No LC 或 unknown。因为 O-N 在 7a 之前检查，
+A=LC、T=No LC 会先成为 O-N，不会进入 7a。
+
+case 7b（region_id 覆盖路径）：
+
+最近 region_id 时间差 <= 2 s
+并且 region_id == 1（Solar wind）或 region_id == 2（Magnetosheath）
+
+满足后，无论 shape、PAD、ratio 或 void 的表格结果是什么：
+
+topology          = DP
+topology_label    = draped DP
+topology_subcase  = 7b
+topology_source   = region_id_1_2_override
+
+当前 region_id 的 ID1/ID2 已要求相应等离子体证据，不再是单纯几何标签；边界缓冲区
+或证据不足会得到 region_id=0，从而不会触发 7b。
+
+7.8 unknown，topology_id=0
+-------------------------
+
+常见来源：
+
+1. toward 或 away shape parameter 为 NaN，导致 shape_class=unknown；
+2. 找不到 6 s 内的 PAD 行；
+3. toward/away PAD score 为 NaN；
+4. A/T ratio 缺失，而 Phe/Phe 的 C-D/C-X 2a 必须使用 ratio；
+5. ratio 恰好等于 0.2 或 5.0；
+6. shape/PAD 组合不在表格中，例如 SWe/SWe 且 A=LC、T=LC 会先命中 C-T，
+   但 SWe/SWe 且 A=unknown、T=No LC 则没有匹配；
+7. O-N 的镜像组合没有单独规则；
+8. MAG 恰为与径向垂直或 MAG 时间匹配失败，toward/away 无法建立；
+9. 没有触发 region_id 1/2 的 DP 覆盖。
+
+unknown 表示“当前证据不能按现有表格唯一分类”，不等于一种独立物理拓扑。
+
+
+八、时间匹配与有效性细节
+========================
+
+shape 样本时间：最终 topology 行的主时间。
+
+PAD score：匹配最近 PAD 合并组时间，默认最大差 6 s；超过后 away_pad_lc 和
+toward_pad_lc 均为 unknown。
+
+region_id：使用 shape 的原始时间作为显式目标时间计算，并在融合时再次匹配最近行，
+默认最大差 2 s。
+
+MAG：shape 和 PAD 子流程默认各允许最大差 60 s。
+
+LPW：默认最大差 60 s；缺失时不终止 shape 计算。
+
+需要注意：
+
+1. pad_score_valid 和 pad_score_reason 会写入最终 CSV 供审计，但最终 LC/No LC
+   转换直接依据 PAD score 是否有限及其相对 -3 的位置，没有额外要求
+   pad_score_valid=True。
+2. shape_status 同样是诊断字段；只要 shape 数值有限，Phe/SWe 转换仍会执行。
+3. region_id 1/2 覆盖不要求原始 table_topology 有效。
+
+
+九、最终 CSV 中最重要的审计字段
+================================
+
+最终结果：
+
+time_utc
+topology
+topology_id
+topology_label
+topology_subcase
+topology_reason
+valid_topology
+topology_source
+
+检查覆盖前表格结果：
+
+table_topology
+table_topology_subcase
+table_topology_reason
+
+检查 region_id 覆盖：
+
+region_id
+region_name
+region_id_delta_seconds
+region_id_confidence
+region_id_reason
+region_id_valid
+
+检查 shape：
+
+away_shape_class
+toward_shape_class
+away_shape_parameter
+toward_shape_parameter
+photoelectron_shape_threshold
+shape_status
+spacecraft_potential_V
+lpw_available
+energy_correction_applied
+
+检查 PAD：
+
+away_pad_lc
+toward_pad_lc
+away_pad_score
+toward_pad_score
+loss_cone_pad_score_threshold
+pad_score_valid
+pad_score_reason
+pad_score_delta_seconds
+
+检查 ratio/void：
+
+at_ratio_35_60eV
+away_flux_35_60eV
+toward_flux_35_60eV
+void
+electron_void_actual_energy_eV
+electron_void_flux
+electron_void_flux_threshold
+ratio_status
+ratio_swe_delta_seconds
+
+检查方向映射：
+
+field_direction
+field_angle_deg
+toward_ratio_source_direction
+away_ratio_source_direction
+
+
+十、当前实现的科学与程序限制
+============================
+
+1. Phe/SWe 的 1.0 阈值依赖当前模板、20-80 eV 范围、绝对差求和方式和 5 点平滑，
+   不是与配置无关的普适常数。
+2. shape 的 df 当前是 log10(flux) 沿能道索引的 gradient；若目标是严格复现
+   dlogF/dlogE，应另行修改并重新生成匹配模板、重新校准阈值。
+3. LPW 缺失时仍会输出未修正 shape，不能把“有有限数值”等同于“能量修正可靠”。
+4. 最终 LC 阈值 -3 与 PAD 子程序展示阈值 -2 不同，分析时应以最终 CSV 的
+   loss_cone_pad_score_threshold 为准。
+5. C-V 使用约 40 eV 单能道的绝对通量阈值；它与 region_id 中采用的多能道电子
+   depletion 判据不同，也与 PAD 子程序的 2σ 全 pitch depletion 判据不同。
+6. A/T ratio 使用单个最近 SWE 时间点，没有额外时间平均。
+7. 表格是不对称的；部分 toward/away 镜像组合没有对应规则，会输出 unknown。
+8. 当前没有对最终 topology 做时间连续性投票、最短持续时间筛选或状态平滑，短时
+   抖动会逐样本出现在输出中。
+9. DP case 7b 依赖 region_id 的正确性；region_id 的 Unknown、边界缓冲和数据缺失
+   会直接决定是否能够触发覆盖。
+10. topology 是基于局地电子谱、PAD、MAG 方向和经验表格得到的操作性分类，不是
+    对全球磁力线进行数值追踪后的直接拓扑证明。
+
+
+十一、最简判别伪代码
+====================
+
+for 每个 shape 时间点:
+    A_shape = Phe if A_shape_parameter <= 1 else SWe
+    T_shape = Phe if T_shape_parameter <= 1 else SWe
+    A_PAD = LC if finite(A_score) and A_score < -3 else No_LC/unknown
+    T_PAD = LC if finite(T_score) and T_score < -3 else No_LC/unknown
+    ratio = A_flux_35_60 / T_flux_35_60
+    void = mean_pitch(flux_near_40eV) < 1e5
+
+    if void:
+        table = C-V (4)
+    elif A_shape=Phe and T_shape=Phe and 0.2<ratio<5:
+        table = C-D (1)
+    elif A_shape=Phe and T_shape=Phe and (ratio<0.2 or ratio>5):
+        table = C-X (2a)
+    elif A_shape=Phe and T_shape=SWe and A_PAD=NoLC and T_PAD=LC:
+        table = C-X (2b)
+    elif A_shape=SWe and T_shape=Phe and A_PAD=LC and T_PAD=NoLC:
+        table = C-X (2c)
+    elif A_PAD=LC and T_PAD=LC:
+        table = C-T (3)
+    elif A_shape=Phe and T_shape=SWe and T_PAD=NoLC:
+        table = O-D (5a)
+    elif A_shape=SWe and T_shape=Phe and A_PAD=NoLC:
+        table = O-D (5b)
+    elif A_shape=SWe and T_shape=SWe and A_PAD=LC and T_PAD=NoLC:
+        table = O-N (6)
+    elif A_shape=SWe and T_shape=SWe and A_PAD=NoLC:
+        table = DP (7a)
+    else:
+        table = unknown
+
+    if nearest_region_id in {1, 2} and delta_time <= 2 s:
+        final = DP (7b)
+    else:
+        final = table
+
+
+十二、相关源文件
+================
+
+magnetic_topology_table_method.py：最终融合表、优先级、region_id 覆盖。
+shape_parameter_method.py：shape parameter、Phe/SWe、LPW 修正、谱平滑。
+PAD_score_method.py：PAD score、sigma、LC/beam/isotropic 和覆盖诊断。
+magnetic_field_direction.py：parallel/antiparallel 到 toward/away 的映射。
+../region_id/classify_region_id.py：region_id 及 DP case 7b 的区域依据。
+

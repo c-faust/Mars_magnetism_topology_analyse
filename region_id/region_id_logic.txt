@@ -1,0 +1,356 @@
+当前 region_id 判别逻辑
+========================
+
+更新日期：2026-08-25
+
+对应代码：
+1. region_id/classify_region_id.py
+2. region_id/data_features.py
+3. region_id/REGION_ID_DECISION_FLOW.md
+
+快速判别表：各 ID 条件及数据 product
+-----------------------------------
+
+共同前提
+~~~~~~~~
+
+- 所有 ID1--ID4 都要求目标时刻存在有效 MAG sunstate-1sec 样本；没有有效 MSO 位置或磁场时为 ID0。
+- MAG product：mvn_mag_l2_*ss1s*.sts。
+- 四类观测候选独立生成；若最高和次高观测分数之差小于 0.08，则因证据冲突返回 ID0。
+- bow shock 和 MPB 不是任何 ID 的必要条件，只能在观测类别已经确定后增加默认 0.03 置信度。
+
+ID1：Solar wind
+~~~~~~~~~~~~~~~
+
+满足下面任意一条路径：
+
+A. 上游归一化太阳风：
+   - SWIA moments 当前窗口有效；
+   - 有可靠上游参考；
+   - 0.70<=n/n_up<=1.30；
+   - 0.70<=B/B_up<=1.30；
+   - 0.85<=V/V_up<=1.15。
+
+B. 不依赖上游参考的本地太阳风：
+   - SWIA moments 当前窗口有效；
+   - V>=200 km/s；
+   - v_th,p/V<=0.17；
+   - MAG 的 std(|B|)/median(|B|)<=0.15。
+
+主要 products：
+- SWIA onboardsvymom：mvn_swi_l2_onboardsvymom_*.cdf，提供 n、V、T；
+- MAG sunstate-1sec：提供 |B|、磁场稳定性和上游 B 参考。
+
+ID2：Magnetosheath
+~~~~~~~~~~~~~~~~~
+
+满足下面任意一条路径：
+
+A. 上游归一化磁鞘，以下全部成立：
+   - SWIA moments 当前窗口有效且上游参考有效；
+   - n/n_up>=1.50；
+   - B/B_up>=2.00；
+   - 0.35<=V/V_up<=0.85。
+
+B. 不依赖上游参考的本地磁鞘：
+   - SWIA moments 当前窗口必须有效；
+   - 下列五项主证据至少满足三项：
+     1) slow_flow：V<=300 km/s，来自 SWIA onboardsvymom；
+     2) proton_heating：v_th,p/V>=0.22，来自 SWIA onboardsvymom；
+     3) flow_deflection：相对 -X_MSO 偏转角>=20 deg，来自 SWIA onboardsvymom；
+     4) magnetic_fluctuations：std(|B|)/median(|B|)>=0.15，来自 MAG ss1s；
+     5) broad_ion_spectrum：log10 能谱宽度>=0.28，来自 SWIA onboardsvyspec。
+
+辅助/反证 product：
+- STATIC c6-32e64m：mvn_sta_l2_c6-32e64m_*.cdf；H+ fraction>=0.50 只增加支持，不计入三项主证据；
+- 若行星重离子 fraction>=0.45 且 H+ fraction<0.50，则反驳本地磁鞘路径；
+- STATIC 缺失本身不阻止 ID2。
+
+ID3：Ionosphere
+~~~~~~~~~~~~~~~
+
+满足下面任意一条路径：
+
+A. 冷行星重离子：
+   - planetary-heavy-ion flux fraction>=0.45；
+   - heavy-ion peak energy<=10 eV；
+   - 来自 STATIC c6-32e64m；不要求 altitude<=400 km。
+
+B. 低高度光电子：
+   - altitude<=400 km，来自 MAG ss1s 的 MSO 位置；
+   - photoelectron_ratio>=1.20，来自 SWEA svypad。
+
+主要 products：
+- STATIC c6-32e64m：行星重离子比例和峰值能量；
+- SWEA svypad：mvn_swe_l2_svypad_*.cdf，提供光电子峰；
+- MAG sunstate-1sec：提供 altitude。
+
+只有低高度、没有冷重离子或光电子证据时不能产生 ID3。
+
+ID4：Magnetic lobes
+~~~~~~~~~~~~~~~~~~~
+
+以下条件全部成立：
+
+1. 实际位置，来自 MAG ss1s：
+   - SZA>=100 deg；
+   - altitude>=400 km。
+
+2. 稳定尾瓣磁场，来自 MAG ss1s 的 60 s 窗口：
+   - 5<=median(|B|)<=25 nT；
+   - std(|B|)/median(|B|)<=0.25；
+   - 磁场方向 RMS 离散度<=25 deg；
+   - abs(median Bx)/norm(median B)>=0.50。
+
+3. 多能道电子耗尽，来自 SWEA svypad：
+   - 30--80 eV 至少三个有效能道；
+   - 至少 75% 能道的通量低于 1.0e5；
+   - 该能段通量中位数低于 1.0e5。
+
+4. 质子密度约束，来自 SWIA onboardsvymom：
+   - 若 SWIA moments 有效，则 n_p<=0.50 cm^-3；
+   - 若 SWIA 不可用，仍允许 ID4，但降低置信度；
+   - 有效且 n_p>0.50 cm^-3 时拒绝 ID4。
+
+ID0：Unknown
+~~~~~~~~~~~~
+
+主要情况：
+- MAG 缺失、时间不匹配、位置或磁场无效；
+- ID1--ID4 均没有足够观测证据；
+- 两个最强区域候选的观测分数差小于 0.08；
+- 只有低高度但没有电离层粒子证据；
+- 尾瓣场条件成立但没有多能道电子耗尽，或有效质子密度过高。
+
+current sheet
+~~~~~~~~~~~~~
+
+- 来自 MAG ss1s 的前翼/中心/后翼窗口；
+- 只写入 structure_flags=current_sheet；
+- 是结构标志，不是单独 region_id，也不覆盖 ID1--ID4。
+
+核心原则
+--------
+
+region_id=1--4 的候选生成和候选排序只使用实测等离子体、粒子、MAG 以及航天器实际位置特征。
+Gruesbeck et al. (2018) bow shock 和 Vignes et al. (2000) MPB 都是统计平均曲面，
+只能在观测证据已经选出类别以后提供很小的置信度加成，不能：
+
+- 单独产生 ID1--ID4；
+- 排除任何已有观测证据的 ID；
+- 在两个类别的观测证据冲突时选择赢家；
+- 因为样本接近统计边界而强制输出 ID0。
+
+一、region_id 定义
+------------------
+
+ID0  Unknown：输入无效、观测证据不足或不同区域证据冲突。
+ID1  Solar wind：太阳风等离子体。
+ID2  Magnetosheath：磁鞘等离子体。
+ID3  Ionosphere：电离层。
+ID4  Magnetic lobes：磁尾瓣。
+
+current sheet 是叠加在背景区域上的结构标志，只写入 structure_flags，不覆盖 region_id。
+
+二、输入数据和时间匹配
+----------------------
+
+- MAG sunstate-1sec：MSO 位置、磁场和 60 s 磁场窗口。
+- SWIA onboardsvymom：质子密度、速度和辅助温度。
+- SWIA onboardsvyspec：离子能谱宽度。
+- SWEA svypad：光电子峰和 30--80 eV 多能道电子耗尽。
+- STATIC c6-32e64m：H+ 与行星重离子通量比例。
+
+默认目标时间步长为 10 s。最近样本最大时间差为：MAG 2 s、SWEA/SWIA 6 s、STATIC 12 s。
+目标时刻没有有效 MAG 位置或磁场时直接输出 ID0。其他仪器缺失不会终止整个区间，
+但依赖相应观测量的证据路径不可用。
+
+三、SWIA 60 s 窗口质量
+----------------------
+
+单个 moments 样本要求 quality_flag=1、decom_flag=1、atten_state!=3，并具有有限正密度和速度。
+目标时刻中心前后各 30 s 的窗口还必须满足：
+
+- 最近样本时间差 <=6 s；
+- 有效样本数 >=5；
+- 覆盖率 >=0.60；
+- 相邻有效样本最大间隔 <=12 s。
+
+窗口输出密度、速度向量、速度和温度中位数。温度只作为辅助量。代码使用：
+
+v_th,p / V = 13.841 * sqrt(T_p[eV]) / V[km/s]
+
+四、可选上游参考
+----------------
+
+算法不假设每条轨道都会经过上游太阳风。上游参考段由下列条件建立：
+
+- SWIA moments 质量有效；
+- r >=2.5 R_M；
+- x_MSO >=1.0 R_M；
+- V >=300 km/s；
+- 可匹配有效 MAG；
+- 连续段至少 15 个样本，间隔 <=12 s；
+- n、V、|B| 的最大稳健相对离散度 <=0.35。
+
+其中 relative_spread=(P90-P10)/(2*median)。
+
+bow-shock 模型位置不再是上游段的准入条件，只记录为 bow_model_outside_fraction 诊断量。
+因此统计 bow shock 不能通过“是否存在上游参考”间接决定 ID1 或 ID2。
+
+目标时刻按 local、前后夹持、6 h 内最近、unavailable 的顺序选择参考段。
+前后参考段相差超过 0.35 时拒绝合并。没有上游参考时，ID1 和 ID2 仍可使用本地证据路径。
+
+五、ID1 太阳风候选
+------------------
+
+路径 A：有可靠上游参考时，同时满足：
+
+0.70 <= n/n_up <=1.30
+0.70 <= B/B_up <=1.30
+0.85 <= V/V_up <=1.15
+
+观测分数为 0.94。
+
+路径 B：无参考本地特征，同时满足：
+
+V >=200 km/s
+v_th,p/V <=0.17
+std(|B|)/median(|B|) <=0.15
+
+观测分数为 0.84。
+
+ID1 在任何 bow-shock 模型位置都可评估；bow shock 外侧只可能在最后增加小额置信度。
+
+六、ID2 磁鞘候选
+----------------
+
+路径 A：上游归一化磁鞘，必须同时满足：
+
+n/n_up >=1.50
+B/B_up >=2.00
+0.35 <= V/V_up <=0.85
+
+local 上游参考的观测分数为 0.90，借用最近或夹持参考时为 0.84。
+STATIC H+ fraction>=0.50 可再增加 0.02，但不是必需条件。
+
+路径 B：不依赖上游参考的本地磁鞘证据。以下五项至少满足三项：
+
+1. slow_flow：V<=300 km/s；
+2. proton_heating：v_th,p/V>=0.22；
+3. flow_deflection：相对 -X_MSO 偏转角>=20 deg；
+4. magnetic_fluctuations：std(|B|)/median(|B|)>=0.15；
+5. broad_ion_spectrum：SWIA log10 能谱宽度>=0.28。
+
+三项的观测分数为 0.76，四项或五项为 0.82。H+ 支持不计入上述三项。
+若匹配 STATIC 同时显示行星重离子比例>=0.45 且 H+ 比例<0.50，则反驳路径 B。
+STATIC 缺失不反驳磁鞘。
+
+ID2 在任何统计边界位置都可评估；“bow shock 内且 MPB 外”只可能在最后增加小额置信度。
+
+七、ID3 电离层候选
+------------------
+
+冷行星重离子：
+
+planetary-heavy-ion flux fraction >=0.45
+heavy-ion peak energy <=10 eV
+
+低高度光电子：
+
+altitude <=400 km
+photoelectron_ratio >=1.20
+
+分数为：
+
+- 低高度+冷重离子+光电子：0.98；
+- 低高度+冷重离子：0.94；
+- 只有冷重离子：0.82，可发生在 400 km 以上；
+- 低高度+光电子：0.94；
+- 只有低高度，没有粒子证据：不是候选。
+
+ID3 不要求位于统计 MPB 内；MPB 内侧只可能在最后增加小额置信度。
+
+八、ID4 磁尾瓣候选
+------------------
+
+实际位置条件：
+
+SZA >=100 deg
+altitude >=400 km
+
+稳定磁场条件全部满足：
+
+5 nT <=60 s median(|B|)<=25 nT
+std(|B|)/median(|B|)<=0.25
+磁场方向 RMS 离散度 <=25 deg
+abs(median Bx)/norm(median B_vector)>=0.50
+
+粒子排除条件：
+
+30--80 eV 有效 SWEA 能道数 >=3
+低于 1.0e5 的能道比例 >=0.75
+该能段通量中位数 <1.0e5
+
+如果 SWIA 质子密度有效，还要求 n_p<=0.50 cm^-3，此时观测分数为 0.88。
+SWIA 缺失时允许判断，但分数降为 0.82。有效且过高的质子密度会拒绝 ID4 候选。
+
+SZA 和海拔是航天器实际位置的物理条件，不是统计边界模型。
+ID4 不要求位于统计 MPB 内；MPB 内侧只可能在最后增加小额置信度。
+
+九、候选冲突
+------------
+
+四类候选独立生成，并按上述“观测分数”排序。统计边界尚未参与。
+若最高和次高观测分数之差小于 0.08，则输出：
+
+region_id=0
+confidence=0.40
+reason=conflicting_region_evidence:...
+
+bow shock 和 MPB 不得打破该冲突。CSV 中的 region_candidate_ids 和
+region_candidate_scores 记录加边界分数之前的候选与分数。
+
+十、bow shock / MPB 的唯一作用
+-------------------------------
+
+只有已经选出唯一观测赢家后，才检查统计边界：
+
+- 已选 ID1 且明确在 bow shock 外：bow_model_support；
+- 已选 ID2 且明确在 bow shock 内、MPB 外：bow_and_mpb_models_support；
+- 已选 ID3/ID4 且明确在 MPB 内：mpb_model_support。
+
+满足相应条件时默认只给 confidence 加 0.03。配置值即使设得更高，代码也硬限制为最多 0.05。
+加成后总 confidence 不超过 0.99。边界不支持时不扣分。
+
+默认 abs(boundary_radial_offset_km)<=100 km 表示离统计曲面过近，不能获得边界加成，
+而不是输出 ID0。该径向偏移是沿火星中心到航天器射线的偏移，不是曲面的最短法向距离。
+
+CSV 诊断字段：
+
+region_candidate_ids
+region_candidate_scores
+boundary_geometry_support
+boundary_geometry_confidence_bonus
+
+十一、主要 ID0 路径
+-------------------
+
+- missing_mag_sample / mag_time_mismatch / invalid_position / invalid_magnetic_field；
+- conflicting_region_evidence；
+- 没有太阳风、磁鞘、电离层或磁尾瓣所需的观测证据；
+- 行星离子反驳参考无关磁鞘；
+- 磁尾瓣其他条件成立但质子密度过高；
+- 稳定尾瓣磁场缺少多能道电子耗尽；
+- 低高度但没有电离层粒子证据。
+
+near_bow_shock 和 near_magnetic_pileup_boundary 已不再是 ID0 原因。
+
+十二、科学限制
+--------------
+
+1. confidence 是确定性的规则分数，不是标定概率。
+2. 等离子体阈值仍需用人工标记、多季节、多太阳风条件的事件集校准。
+3. SWIA onboard 温度受质子假设、alpha 粒子和视场覆盖影响，只作辅助证据。
+4. STATIC 比例是有效能量通量数组求和的比例，不是完整物种分布反演。
+5. 当前没有时间标签平滑、边界穿越搜索、MVA 或机器学习分类。

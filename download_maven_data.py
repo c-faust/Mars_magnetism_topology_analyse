@@ -16,6 +16,7 @@ place that knows:
 
 import argparse
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -35,6 +36,9 @@ FILE_NAMES_URL = (
 DOWNLOAD_URL = (
     "https://lasp.colorado.edu/maven/sdc/public/files/api/v1/search/science/fn_metadata/download"
 )
+
+# Print one percentage update at most this often while a file is downloading.
+DOWNLOAD_PROGRESS_INTERVAL_SECONDS = 10.0
 
 FILENAME_PATTERN = re.compile(
     r"^mvn_"
@@ -68,6 +72,8 @@ class ProductSpec:
 
 PIPELINE_PRODUCTS = (
     ProductSpec("swe", "svypad", ("svypad",)),
+    ProductSpec("swi", "onboardsvymom", ("onboardsvymom",), format_preference=("cdf",)),
+    ProductSpec("swi", "onboardsvyspec", ("onboardsvyspec",), format_preference=("cdf",)),
     ProductSpec("sta", "c6-32e64m", ("c6-32e64m", "32e64m"), format_preference=("cdf",)),
     ProductSpec("lpw", "mrgscpot", ("mrgscpot",), format_preference=("cdf",)),
     ProductSpec("mag", "sunstate-1sec", ("sunstate-1sec", "ss1s"), format_preference=("sts", "tab")),
@@ -210,12 +216,46 @@ def download_file(session: requests.Session, filename: str, local_path: Path) ->
     if local_path.exists():
         return local_path
 
-    with session.get(DOWNLOAD_URL, params={"file": filename}, stream=True, timeout=(20, 180)) as response:
-        response.raise_for_status()
-        with local_path.open("wb") as handle:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
+    partial_path = local_path.with_name(f"{local_path.name}.part")
+    try:
+        with session.get(DOWNLOAD_URL, params={"file": filename}, stream=True, timeout=(20, 180)) as response:
+            response.raise_for_status()
+            content_length = response.headers.get("Content-Length")
+            total_bytes = int(content_length) if content_length and content_length.isdigit() else None
+            downloaded_bytes = 0
+            last_progress_time = time.monotonic()
+            last_reported_percentage = 0.0
+
+            if total_bytes:
+                print(f"[download] {filename}: 0.00%", flush=True)
+
+            with partial_path.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if not chunk:
+                        continue
                     handle.write(chunk)
+                    downloaded_bytes += len(chunk)
+
+                    now = time.monotonic()
+                    if total_bytes and now - last_progress_time >= DOWNLOAD_PROGRESS_INTERVAL_SECONDS:
+                        percentage = min(100.0, 100.0 * downloaded_bytes / total_bytes)
+                        print(f"[download] {filename}: {percentage:.2f}%", flush=True)
+                        last_reported_percentage = percentage
+                        last_progress_time = now
+
+        if total_bytes is not None and downloaded_bytes != total_bytes:
+            raise IOError(
+                f"Incomplete download for {filename}: received {downloaded_bytes} "
+                f"of {total_bytes} bytes."
+            )
+
+        partial_path.replace(local_path)
+        if total_bytes and last_reported_percentage < 100.0:
+            print(f"[download] {filename}: 100.00%", flush=True)
+    except Exception:
+        partial_path.unlink(missing_ok=True)
+        raise
+
     return local_path
 
 
@@ -244,6 +284,11 @@ def download_products_for_timestamp(
 
     Even though the input is a timestamp, the public MAVEN files are daily
     products, so internally we download by `target_time.date()`.
+
+    Products are independent: a missing remote product, network failure, or
+    local file error is reported and skipped without preventing later products
+    from being attempted.  The returned mapping contains successful products
+    only.
     """
     session = build_session()
     day = target_time.date()
@@ -251,7 +296,19 @@ def download_products_for_timestamp(
 
     for spec in specs:
         key = f"{spec.instrument}_{spec.datatype}"
-        downloaded[key] = download_product_for_day(session, spec=spec, day=day, data_root=data_root)
+        try:
+            downloaded[key] = download_product_for_day(
+                session,
+                spec=spec,
+                day=day,
+                data_root=data_root,
+            )
+        except (OSError, requests.RequestException, ValueError) as exc:
+            print(
+                f"[download] skip {key} for {day.isoformat()}: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
 
     return downloaded
 

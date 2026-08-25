@@ -1,7 +1,59 @@
 # Region classifier evaluation response
 
-This file records how the current implementation handles the algorithm reviews
-supplied on 2026-07-18.
+This file records implementation responses to successive algorithm reviews.
+Historical validation counts describe the classifier version named by each
+section; the current decision specification is `REGION_ID_DECISION_FLOW.md`.
+
+## 2026-08-24 boundary-model down-weighting revision
+
+| Review item | Action |
+|---|---|
+| Bow shock and MPB must not decide IDs 1-4 | Candidate creation and ranking now use only in-situ plasma, particle, MAG and physical-position evidence. |
+| Statistical surfaces may remain a small component | A consistent surface configuration adds `0.03` only after the observational label has been selected; the configurable bonus is hard-capped at `0.05`. |
+| Boundary disagreement or proximity must not reject a label | Disagreement has no penalty. The 100 km margin merely suppresses the bonus and no longer forces ID 0. |
+| Geometry must not decide an observational conflict | If the two highest pre-geometry scores differ by less than `0.08`, the result is ID 0; the boundary bonus is never evaluated. |
+| Per-sample influence must be auditable | CSV now records candidate IDs/scores, boundary support text and the exact boundary confidence bonus. |
+
+Targeted unit tests verify that each of IDs 1-4 can survive a bow-shock/MPB
+model disagreement, that near-boundary evidence remains classifiable, and that
+geometry cannot break a magnetosheath/ionosphere evidence conflict.
+
+Current real-data checks:
+
+- 2018-03-10 05:38-05:50 UTC remains conservative: 72 ID0 and one
+  particle-supported ID3; no ID1/ID2/ID4 was created by removing the boundary
+  gates.
+- 2024-11-07 00:43-00:55 UTC yields 56 reference-free ID2 samples. Forty-four
+  receive the bow+MPB bonus; 12 are within the MPB 100 km margin and remain ID2
+  from slow flow, proton heating and a broad ion spectrum, with zero boundary
+  bonus.
+
+## 2026-08-24 magnetosheath-focused revision
+
+| Review item | Action |
+|---|---|
+| Some orbits do not reach upstream solar wind | Upstream references are optional. The fallback uses at least three local primary sheath signatures and records `upstream_reference_source=unavailable`. |
+| Bow-shock/MPB geometry was being treated as ground truth | This intermediate revision made geometry a candidate mask; the later down-weighting revision above removed that mask entirely. |
+| Magnetosheath needed measured plasma features | Added quality-screened SWIA onboard survey density, MSO velocity, auxiliary temperature and energy-spectrum shape features. |
+| Borrowed upstream conditions can change | Local, bracketing and nearest references are provenance-tagged; inconsistent bracketing segments are rejected. |
+| STATIC can be missing | H+ dominance is optional support. Missing STATIC does not reject an otherwise supported sheath sample. |
+| Single-channel electron void was fragile | ID 4 now requires multichannel 30-80 eV depletion and checks SWIA proton density when available. |
+| Current sheet is a structure inside a background region | The signature is written to `structure_flags` and no longer overwrites `region_id`. |
+
+Real-data checks:
+
+- 2024-11-07 00:43-00:55 UTC contained no valid upstream segment. The local
+  path still identified 22 sheath samples; boundary, missing-SWIA and
+  insufficient-evidence samples remained Unknown.
+- 2015-01-15 04:45-05:20 UTC found consistent upstream segments. The run
+  produced 30 sheath samples, including 25 through the normalized
+  compression/deceleration path, as well as 42 plasma-supported solar-wind
+  samples.
+
+The deterministic thresholds are implemented and tested, but they remain
+calibration candidates rather than validated probabilities.
+
+## 2026-07-18 revision history
 
 ## Implemented now
 

@@ -66,6 +66,19 @@ DEFAULT_ELECTRON_VOID_ENERGY_EV = 40.0
 DEFAULT_ELECTRON_VOID_FLUX_THRESHOLD = 1.0e5
 DEFAULT_MAX_REGION_ID_DELTA_SECONDS = 2.0
 DEFAULT_REGION_ID_BOUNDARY_MARGIN_KM = 100.0
+TOPOLOGY_ID_BY_NAME = {
+    "unknown": 0,
+    "C-D": 1,
+    "C-X": 2,
+    "C-T": 3,
+    "C-V": 4,
+    "O-D": 5,
+    "O-N": 6,
+    "DP": 7,
+}
+TOPOLOGY_NAME_BY_ID = {
+    topology_id: name for name, topology_id in TOPOLOGY_ID_BY_NAME.items()
+}
 
 
 def format_unix_time(value: float) -> str:
@@ -110,7 +123,7 @@ def band_mean_flux(energy_eV: np.ndarray, flux: np.ndarray, energy_range_eV: tup
 
 def compute_at_ratio_for_shape_rows(
     shape_rows: list[dict],
-    data_root: Path,
+    data_root: Path | tuple[Path, ...] | list[Path],
     energy_range_eV: tuple[float, float],
     forward_pitch_max_deg: float,
     backward_pitch_min_deg: float,
@@ -368,14 +381,14 @@ def build_topology_dataframe(
             region_geometry_only = bool(region_row.get("geometry_only", False))
             region_valid = np.isfinite(raw_region_id)
 
-        if region_id_value in {0, 1}:
+        if region_id_value in {1, 2}:
             topology = "DP"
             subcase = "7b"
             reason = (
                 f"region_id={region_id_value} ({region_name}) is assigned "
                 "draped topology DP before the shape/PAD lookup table."
             )
-            topology_source = "region_id_0_1_override"
+            topology_source = "region_id_1_2_override"
         else:
             topology_source = "xu2019_shape_pad_table"
 
@@ -384,6 +397,7 @@ def build_topology_dataframe(
                 "time_unix": sample_unix,
                 "time_utc": str(row.get("time_utc", format_unix_time(sample_unix))),
                 "topology": topology,
+                "topology_id": TOPOLOGY_ID_BY_NAME.get(topology, 0),
                 "topology_label": "draped DP" if topology == "DP" else topology,
                 "topology_subcase": subcase,
                 "topology_reason": reason,
@@ -438,6 +452,114 @@ def build_topology_dataframe(
             }
         )
     return pd.DataFrame(output_rows)
+
+
+def classify_magnetic_topology_interval(
+    start: datetime,
+    end: datetime,
+    data_root: str | Path | tuple[str | Path, ...] | list[str | Path] = DEFAULT_DATA_ROOT,
+    template_path: str | Path = DEFAULT_TEMPLATE_PATH,
+    cadence_seconds: float = 0.0,
+    photoelectron_shape_threshold: float = 1.0,
+    region_id_boundary_margin_km: float = DEFAULT_REGION_ID_BOUNDARY_MARGIN_KM,
+    max_region_id_delta_seconds: float = DEFAULT_MAX_REGION_ID_DELTA_SECONDS,
+) -> tuple[pd.DataFrame, dict]:
+    """Run the table method in memory for reuse by plotting and other modules."""
+    start = start.astimezone(timezone.utc)
+    end = end.astimezone(timezone.utc)
+    if end <= start:
+        raise ValueError("end must be later than start")
+
+    if isinstance(data_root, (str, Path)):
+        roots = (Path(data_root).expanduser().resolve(),)
+    else:
+        roots = tuple(Path(value).expanduser().resolve() for value in data_root)
+    if not roots:
+        raise ValueError("At least one MAVEN data root is required")
+    root: Path | tuple[Path, ...] = roots[0] if len(roots) == 1 else roots
+    template = Path(template_path).expanduser().resolve()
+    template_energy, template_df = load_template(template)
+    shape_rows, shape_skip_counts = compute_shape_parameters(
+        start=start,
+        end=end,
+        data_root=root,
+        template_energy_eV=template_energy,
+        template_df=template_df,
+        cadence_seconds=max(0.0, float(cadence_seconds)),
+        max_lpw_delta_seconds=DEFAULT_MAX_LPW_DELTA_SECONDS,
+        max_mag_delta_seconds=DEFAULT_MAX_MAG_DELTA_SECONDS,
+        spacecraft_potential_min_flag=DEFAULT_SCPOT_MIN_FLAG,
+        forward_pitch_max_deg=30.0,
+        backward_pitch_min_deg=150.0,
+        difference_mode="absolute",
+        shape_energy_range_eV=DEFAULT_SHAPE_ENERGY_RANGE_EV,
+        spectral_smoothing_window_points=5,
+    )
+    pad_df = classify_pad_timeseries(
+        start=start,
+        end=end,
+        data_root=root,
+        energy_range_eV=DEFAULT_PAD_ENERGY_RANGE_EV,
+        energy_method="mean",
+        group_size=4,
+        keep_partial=False,
+        threshold_sigma=2.0,
+        max_mag_delta_seconds=DEFAULT_MAX_MAG_DELTA_SECONDS,
+        bands=PitchAngleBands(),
+    )
+    ratio_by_time = compute_at_ratio_for_shape_rows(
+        shape_rows,
+        data_root=root,
+        energy_range_eV=DEFAULT_RATIO_ENERGY_RANGE_EV,
+        forward_pitch_max_deg=30.0,
+        backward_pitch_min_deg=150.0,
+        electron_void_energy_eV=DEFAULT_ELECTRON_VOID_ENERGY_EV,
+        electron_void_flux_threshold=DEFAULT_ELECTRON_VOID_FLUX_THRESHOLD,
+    )
+
+    target_times = [
+        finite_float(row.get("time_unix"))
+        for row in shape_rows
+        if np.isfinite(finite_float(row.get("time_unix")))
+    ]
+    region_rows: list[dict] = []
+    region_metadata: dict = {}
+    if target_times:
+        region_rows, region_metadata = classify_region_interval(
+            start=start,
+            end=end,
+            data_root=root,
+            config=RegionClassifierConfig(
+                boundary_margin_km=float(region_id_boundary_margin_km)
+            ),
+            target_times_unix=target_times,
+        )
+
+    topology_df = build_topology_dataframe(
+        shape_rows,
+        pad_df,
+        ratio_by_time,
+        photoelectron_shape_threshold=float(photoelectron_shape_threshold),
+        max_pad_delta_seconds=6.0,
+        loss_cone_pad_score_threshold=DEFAULT_LOSS_CONE_PAD_SCORE_THRESHOLD,
+        region_df=pd.DataFrame(region_rows),
+        max_region_delta_seconds=float(max_region_id_delta_seconds),
+    )
+    metadata = {
+        "start_utc": start.isoformat(timespec="seconds"),
+        "end_utc": end.isoformat(timespec="seconds"),
+        "data_root": str(roots[0]) if len(roots) == 1 else [str(path) for path in roots],
+        "data_roots": [str(path) for path in roots],
+        "template": str(template),
+        "shape_skip_counts": shape_skip_counts,
+        "region_id": region_metadata,
+        "topology_counts": (
+            topology_df["topology"].value_counts(dropna=False).to_dict()
+            if not topology_df.empty
+            else {}
+        ),
+    }
+    return topology_df, metadata
 
 
 def plot_topology_timeseries(df: pd.DataFrame, output_path: Path) -> None:
@@ -681,9 +803,9 @@ def main() -> None:
             "enabled": spectral_smoothing_enabled,
             "window_points": spectral_smoothing_points,
         },
-        "lookup_table_note": "A=away, T=toward, LC=loss cone, Phe=photoelectron-like shape, SWe=solar-wind/backscattered-like shape. region_id 0 or 1 overrides the shape/PAD result as draped DP case 7b.",
+        "lookup_table_note": "A=away, T=toward, LC=loss cone, Phe=photoelectron-like shape, SWe=solar-wind/backscattered-like shape. region_id 1 or 2 overrides the shape/PAD result as draped DP case 7b.",
         "region_id_rule": {
-            "override_region_ids": [0, 1],
+            "override_region_ids": [1, 2],
             "topology": "DP",
             "topology_label": "draped DP",
             "topology_subcase": "7b",
@@ -696,7 +818,7 @@ def main() -> None:
         "valid_topology_rows": int(topology_df["valid_topology"].sum()) if not topology_df.empty else 0,
         "topology_counts": topology_df["topology"].value_counts(dropna=False).to_dict() if not topology_df.empty else {},
         "region_id_override_rows": (
-            int((topology_df["topology_source"] == "region_id_0_1_override").sum())
+            int((topology_df["topology_source"] == "region_id_1_2_override").sum())
             if not topology_df.empty
             else 0
         ),

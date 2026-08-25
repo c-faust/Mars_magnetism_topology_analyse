@@ -555,29 +555,59 @@ def process_target_time(
 
 
 def infer_daily_file(
-    data_root: Path,
+    data_root: Path | str | tuple[Path | str, ...] | list[Path | str],
     instrument: str,
     datatype_alias: str,
     day: datetime,
     extension: str,
 ) -> Path:
+    """Find the best daily product across one or more MAVEN data roots.
+
+    Multiple roots act as one logical data store.  The highest file version
+    and revision wins; for an identical product the earlier root has priority.
+    This permits adding a second disk without moving the existing archive.
+    """
     day_code = day.strftime("%Y%m%d")
-    for candidate in data_root.rglob(f"mvn_{instrument}_*"):
-        if not candidate.is_file():
+    if isinstance(data_root, (str, Path)):
+        roots = (Path(data_root),)
+    else:
+        roots = tuple(Path(value) for value in data_root)
+    if not roots:
+        raise ValueError("At least one MAVEN data root is required.")
+
+    matches: list[tuple[tuple[int, int, int, str], Path]] = []
+    for root_index, root in enumerate(roots):
+        if not root.exists():
             continue
-        parsed = parse_filename(candidate.name)
-        if not parsed:
-            continue
-        if parsed["instrument"] != instrument:
-            continue
-        if parsed["extension"] != extension:
-            continue
-        if f"{parsed['year']}{parsed['month']}{parsed['day']}" != day_code:
-            continue
-        if datatype_alias not in parsed["description"].lower():
-            continue
-        return candidate
-    raise FileNotFoundError(f"Could not find {instrument}/{datatype_alias} for {day_code} under {data_root}.")
+        for candidate in root.rglob(f"mvn_{instrument}_*"):
+            if not candidate.is_file():
+                continue
+            parsed = parse_filename(candidate.name)
+            if not parsed:
+                continue
+            if parsed["instrument"] != instrument:
+                continue
+            if parsed["extension"] != extension:
+                continue
+            if f"{parsed['year']}{parsed['month']}{parsed['day']}" != day_code:
+                continue
+            if datatype_alias not in parsed["description"].lower():
+                continue
+            sort_key = (
+                -int(parsed["version"]),
+                -int(parsed["revision"]),
+                root_index,
+                str(candidate),
+            )
+            matches.append((sort_key, candidate))
+
+    if matches:
+        matches.sort(key=lambda item: item[0])
+        return matches[0][1]
+    roots_text = ", ".join(str(root) for root in roots)
+    raise FileNotFoundError(
+        f"Could not find {instrument}/{datatype_alias} for {day_code} under [{roots_text}]."
+    )
 
 
 def build_argument_parser() -> argparse.ArgumentParser:

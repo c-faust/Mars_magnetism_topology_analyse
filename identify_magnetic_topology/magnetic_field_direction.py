@@ -57,7 +57,11 @@ def load_mag_sunstate_day(path: Path) -> dict:
     }
 
 
-def load_magnetic_geometry_interval(data_root: Path, start: datetime, end: datetime) -> dict | None:
+def load_magnetic_geometry_interval(
+    data_root: Path | tuple[Path, ...] | list[Path],
+    start: datetime,
+    end: datetime,
+) -> dict | None:
     times: list[np.ndarray] = []
     fields: list[np.ndarray] = []
     positions: list[np.ndarray] = []

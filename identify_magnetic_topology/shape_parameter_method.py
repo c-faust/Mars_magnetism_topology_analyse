@@ -103,7 +103,12 @@ def load_template(path: Path) -> tuple[np.ndarray, np.ndarray]:
     return energy_array[order], value_array[order]
 
 
-def load_lpw_interval(data_root: Path, start: datetime, end: datetime, min_flag: float) -> dict[str, np.ndarray] | None:
+def load_lpw_interval(
+    data_root: Path | tuple[Path, ...] | list[Path],
+    start: datetime,
+    end: datetime,
+    min_flag: float,
+) -> dict[str, np.ndarray] | None:
     times: list[np.ndarray] = []
     potentials: list[np.ndarray] = []
     flags: list[np.ndarray] = []
@@ -311,7 +316,7 @@ def append_nan_row(
 def compute_shape_parameters(
     start: datetime,
     end: datetime,
-    data_root: Path,
+    data_root: Path | tuple[Path, ...] | list[Path],
     template_energy_eV: np.ndarray,
     template_df: np.ndarray,
     cadence_seconds: float,

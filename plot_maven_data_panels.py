@@ -15,14 +15,38 @@ Panel catalog (use these stable IDs with ``--panels``):
   6  MAG field components Bx, By, Bz in MSO
   7  SWEA PAD for energy band 1 (default 20-80 eV)
   8  SWEA PAD for energy band 2 (default 111-140 eV)
-  9  Bottom UTC/position/latitude/longitude/altitude annotations
+ 9  Bottom UTC/position/latitude/longitude/altitude annotations
  10  region_id classification versus time
+    | region_id | Region |
+    |---:|---|
+    | 0 | Unknown / boundary / unresolved |
+    | 1 | Solar wind |
+    | 2 | Magnetosheath |
+    | 3 | Ionosphere |
+    | 4 | Magnetic lobes |
+ 11  magnetic topology ID versus time
 
-Panel 9 is a coordinate annotation footer and is always placed last.
+ 12  toward/away shape parameter versus time
+ 13  toward/away PAD score versus time
+ 14  STATIC full ion mass spectrogram
+
+Panels follow the input order. Panel 9 is a coordinate annotation footer and is
+always placed last.
 
 Examples:
   --panels 1 4 5 6 9
-  --panels 4,7,8,10,9
+  --panels 12,13,11,14,9
+
+Add one or more vertical reference lines with repeated ``--line`` options:
+  --line 2024-11-07T02:12:00
+  --line 2024-11-07T02:15:30 dashed red
+  --line 2024-11-07T02:18:00 dotted blue
+
+The syntax is ``--line TIME [STYLE] [COLOR]``. STYLE defaults to ``solid``
+and COLOR defaults to ``black``. Supported style names are ``solid``,
+``dashed``, ``dashdot``, and ``dotted``; the Chinese names
+实线/虚线/点划线/点线 are also accepted. Repeat ``--line`` to add multiple
+markers.
 """
 
 import argparse
@@ -36,7 +60,7 @@ import cdflib
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import LogNorm
+from matplotlib.colors import LogNorm, is_color_like
 
 from analyze_magnetic_topology import (
     build_mag_context,
@@ -52,6 +76,7 @@ from process_maven_spectra import load_pad_data
 
 MARS_RADIUS_KM = 3389.5
 LINE_COLORS = {"bx": "#cc4338", "by": "#2674c8", "bz": "#3a8a53", "bmag": "#6e5b4f"}
+SHAPE_PARAMETER_COLORS = {"toward": "#2674c8", "away": "#cc4338"}
 REGION_ID_COLORS = {
     0: "#6B7280",
     1: "#E0A21A",
@@ -59,12 +84,46 @@ REGION_ID_COLORS = {
     3: "#2E7D5B",
     4: "#3568A8",
 }
+TOPOLOGY_ID_NAMES = {
+    0: "unknown",
+    1: "C-D",
+    2: "C-X",
+    3: "C-T",
+    4: "C-V",
+    5: "O-D",
+    6: "O-N",
+    7: "DP",
+}
+TOPOLOGY_ID_COLORS = {
+    0: "#6B7280",
+    1: "#2878B5",
+    2: "#C23B53",
+    3: "#7958A5",
+    4: "#8A6A3F",
+    5: "#2E8B78",
+    6: "#D27932",
+    7: "#20252B",
+}
 PAD_CMAP = "turbo"
 FLUX_CMAP = "inferno"
 DEFAULT_OUTPUT_ROOT = Path("outputs") / "maven_data_panels"
 DEFAULT_PAD_ENERGY_BANDS_EV = ((20.0, 80.0), (111.0, 140.0))
 DEFAULT_PAD_ENERGY_BAND_EV = DEFAULT_PAD_ENERGY_BANDS_EV[0]
 STATIC_MASS_SPLIT_AMU = 1.5
+VERTICAL_LINE_STYLE_ALIASES = {
+    "-": "-",
+    "solid": "-",
+    "实线": "-",
+    "--": "--",
+    "dashed": "--",
+    "虚线": "--",
+    "-.": "-.",
+    "dashdot": "-.",
+    "点划线": "-.",
+    ":": ":",
+    "dotted": ":",
+    "点线": ":",
+}
 
 # Keep IDs stable: command lines and downstream pipelines may persist them.
 PANEL_CATALOG = {
@@ -78,11 +137,21 @@ PANEL_CATALOG = {
     8: {"key": "swe_pad_band_2", "name": "SWEA PAD band 2", "height_ratio": 1.05},
     9: {"key": "coordinates", "name": "UTC and spacecraft coordinates", "height_ratio": 0.78},
     10: {"key": "region_id", "name": "region_id classification", "height_ratio": 0.8},
+    11: {"key": "topology_id", "name": "magnetic topology ID", "height_ratio": 1.0},
+    12: {"key": "shape_parameter", "name": "toward/away shape parameter", "height_ratio": 0.9},
+    13: {"key": "pad_score", "name": "toward/away PAD score", "height_ratio": 0.9},
+    14: {"key": "static_mass_full", "name": "STATIC full ion mass", "height_ratio": 1.15},
 }
 DEFAULT_PANEL_IDS = tuple(range(1, 10))
 PAD_PANEL_BAND_INDEX = {7: 0, 8: 1}
 COORDINATE_PANEL_ID = 9
 REGION_ID_PANEL_ID = 10
+TOPOLOGY_ID_PANEL_ID = 11
+SHAPE_PARAMETER_PANEL_ID = 12
+PAD_SCORE_PANEL_ID = 13
+FULL_MASS_PANEL_ID = 14
+SHAPE_PARAMETER_THRESHOLD = 1.0
+PAD_SCORE_THRESHOLD_SIGMA = 2.0
 
 
 def log_step(message: str) -> None:
@@ -95,6 +164,35 @@ def unix_to_matplotlib_dates(values: np.ndarray) -> np.ndarray:
 
 def iso_to_unix(value: str) -> float:
     return parse_iso_timestamp(value).timestamp()
+
+
+def parse_vertical_line_specs(
+    values: list[list[str]] | None,
+) -> tuple[tuple[datetime, str, str], ...]:
+    """Parse repeated ``--line TIME [STYLE] [COLOR]`` specifications."""
+    if not values:
+        return ()
+
+    parsed: list[tuple[datetime, str, str]] = []
+    for specification in values:
+        if not 1 <= len(specification) <= 3:
+            raise ValueError(
+                "Each --line requires TIME and optionally STYLE and COLOR."
+            )
+        line_time = parse_iso_timestamp(specification[0])
+        style_name = specification[1].strip().lower() if len(specification) >= 2 else "solid"
+        if style_name not in VERTICAL_LINE_STYLE_ALIASES:
+            choices = ", ".join(("solid", "dashed", "dashdot", "dotted"))
+            raise ValueError(
+                f"Unknown vertical-line style {specification[1]!r}; choose from {choices}."
+            )
+        color = specification[2].strip() if len(specification) >= 3 else "black"
+        if not is_color_like(color):
+            raise ValueError(f"Invalid Matplotlib color for --line: {color!r}.")
+        parsed.append(
+            (line_time, VERTICAL_LINE_STYLE_ALIASES[style_name], color)
+        )
+    return tuple(parsed)
 
 
 def finite_array(values) -> np.ndarray:
@@ -135,8 +233,8 @@ def validate_panel_ids(values=None) -> tuple[int, ...]:
         raise ValueError(f"Duplicate panel ID(s) are not allowed: {duplicates}.")
     ordered = [
         panel_id
-        for panel_id in PANEL_CATALOG
-        if panel_id in parsed and panel_id != COORDINATE_PANEL_ID
+        for panel_id in parsed
+        if panel_id != COORDINATE_PANEL_ID
     ]
     if COORDINATE_PANEL_ID in parsed:
         ordered.append(COORDINATE_PANEL_ID)
@@ -735,6 +833,162 @@ def build_region_id_context(
     }
 
 
+def build_magnetic_topology_context(
+    start: datetime,
+    end: datetime,
+    data_root: Path,
+    cadence_seconds: float = 0.0,
+) -> dict:
+    # Imported lazily because the topology workflow loads SWEA, MAG, LPW,
+    # STATIC, the template, and the region classifier.
+    from identify_magnetic_topology.magnetic_topology_table_method import (
+        classify_magnetic_topology_interval,
+    )
+
+    topology_df, metadata = classify_magnetic_topology_interval(
+        start=start,
+        end=end,
+        data_root=data_root,
+        cadence_seconds=float(cadence_seconds),
+    )
+    if topology_df.empty:
+        return {
+            "times_unix": [],
+            "topology_id": [],
+            "topology": [],
+            "topology_subcase": [],
+            "topology_source": [],
+            "toward_shape_parameter": [],
+            "away_shape_parameter": [],
+            "toward_pad_score": [],
+            "away_pad_score": [],
+            "metadata": metadata,
+        }
+    return {
+        "times_unix": topology_df["time_unix"].astype(float).tolist(),
+        "topology_id": topology_df["topology_id"].astype(int).tolist(),
+        "topology": topology_df["topology"].astype(str).tolist(),
+        "topology_subcase": topology_df["topology_subcase"].astype(str).tolist(),
+        "topology_source": topology_df["topology_source"].astype(str).tolist(),
+        "toward_shape_parameter": topology_df["toward_shape_parameter"].astype(float).tolist(),
+        "away_shape_parameter": topology_df["away_shape_parameter"].astype(float).tolist(),
+        "toward_pad_score": topology_df["toward_pad_score"].astype(float).tolist(),
+        "away_pad_score": topology_df["away_pad_score"].astype(float).tolist(),
+        "metadata": metadata,
+    }
+
+
+def build_shape_parameter_context(
+    start: datetime,
+    end: datetime,
+    data_root: Path,
+    cadence_seconds: float = 0.0,
+) -> dict:
+    """Compute the two source-direction shape parameters used by panel 12."""
+    # Imported lazily because shape calculation loads SWEA, LPW, MAG, and the
+    # derivative-spectrum template. Other panel combinations do not need it.
+    from identify_magnetic_topology.shape_parameter_method import (
+        DEFAULT_MAX_LPW_DELTA_SECONDS,
+        DEFAULT_MAX_MAG_DELTA_SECONDS,
+        DEFAULT_SHAPE_ENERGY_RANGE_EV,
+        DEFAULT_TEMPLATE_PATH,
+        compute_shape_parameters,
+        load_template,
+    )
+    from process_maven_spectra import DEFAULT_SCPOT_MIN_FLAG
+
+    template_energy, template_df = load_template(DEFAULT_TEMPLATE_PATH)
+    rows, skip_counts = compute_shape_parameters(
+        start=start,
+        end=end,
+        data_root=data_root,
+        template_energy_eV=template_energy,
+        template_df=template_df,
+        cadence_seconds=max(0.0, float(cadence_seconds)),
+        max_lpw_delta_seconds=DEFAULT_MAX_LPW_DELTA_SECONDS,
+        max_mag_delta_seconds=DEFAULT_MAX_MAG_DELTA_SECONDS,
+        spacecraft_potential_min_flag=DEFAULT_SCPOT_MIN_FLAG,
+        forward_pitch_max_deg=30.0,
+        backward_pitch_min_deg=150.0,
+        difference_mode="absolute",
+        shape_energy_range_eV=DEFAULT_SHAPE_ENERGY_RANGE_EV,
+        spectral_smoothing_window_points=5,
+    )
+    return {
+        "times_unix": [float(row["time_unix"]) for row in rows],
+        "toward_shape_parameter": [
+            float(row.get("toward_shape_parameter", float("nan"))) for row in rows
+        ],
+        "away_shape_parameter": [
+            float(row.get("away_shape_parameter", float("nan"))) for row in rows
+        ],
+        "status": [str(row.get("status", "")) for row in rows],
+        "metadata": {
+            "start_utc": start.isoformat(timespec="seconds"),
+            "end_utc": end.isoformat(timespec="seconds"),
+            "cadence_seconds": max(0.0, float(cadence_seconds)),
+            "template": str(DEFAULT_TEMPLATE_PATH),
+            "skip_counts": skip_counts,
+        },
+    }
+
+
+def build_pad_score_context(
+    start: datetime,
+    end: datetime,
+    data_root: Path,
+) -> dict:
+    """Compute native-cadence toward/away PAD scores used by panel 13."""
+    from identify_magnetic_topology.PAD_score_method import (
+        DEFAULT_ENERGY_RANGE_EV,
+        DEFAULT_MAX_MAG_DELTA_SECONDS,
+        PitchAngleBands,
+        classify_pad_timeseries,
+    )
+
+    frame = classify_pad_timeseries(
+        start=start,
+        end=end,
+        data_root=data_root,
+        energy_range_eV=DEFAULT_ENERGY_RANGE_EV,
+        energy_method="mean",
+        group_size=4,
+        keep_partial=False,
+        threshold_sigma=PAD_SCORE_THRESHOLD_SIGMA,
+        max_mag_delta_seconds=DEFAULT_MAX_MAG_DELTA_SECONDS,
+        bands=PitchAngleBands(),
+    )
+    if frame.empty:
+        return {
+            "times_unix": [],
+            "toward_pad_score": [],
+            "away_pad_score": [],
+            "valid": [],
+            "metadata": {
+                "start_utc": start.isoformat(timespec="seconds"),
+                "end_utc": end.isoformat(timespec="seconds"),
+                "energy_range_eV": list(DEFAULT_ENERGY_RANGE_EV),
+                "group_size": 4,
+                "threshold_sigma": PAD_SCORE_THRESHOLD_SIGMA,
+            },
+        }
+    return {
+        "times_unix": frame["time_unix"].astype(float).tolist(),
+        "toward_pad_score": frame["toward_pad_score"].astype(float).tolist(),
+        "away_pad_score": frame["away_pad_score"].astype(float).tolist(),
+        "valid": frame["valid"].astype(bool).tolist(),
+        "metadata": {
+            "start_utc": start.isoformat(timespec="seconds"),
+            "end_utc": end.isoformat(timespec="seconds"),
+            "energy_range_eV": list(DEFAULT_ENERGY_RANGE_EV),
+            "energy_method": "mean",
+            "group_size": 4,
+            "keep_partial": False,
+            "threshold_sigma": PAD_SCORE_THRESHOLD_SIGMA,
+        },
+    }
+
+
 def window_indices(times_unix, center_unix: float, window_seconds: float) -> np.ndarray:
     times = finite_array(times_unix)
     return np.where((times >= center_unix - window_seconds / 2.0) & (times <= center_unix + window_seconds / 2.0))[0]
@@ -955,6 +1209,72 @@ def plot_line_panel(ax, times_unix, traces: list[tuple[str, str, np.ndarray]], t
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
 
 
+def plot_shape_parameter_panel(ax, times_unix, toward_values, away_values) -> None:
+    """Plot toward/away shape parameters with the topology-table threshold."""
+    times = finite_array(times_unix)
+    toward = finite_array(toward_values)
+    away = finite_array(away_values)
+    count = min(times.size, toward.size, away.size)
+    traces = (
+        [
+            ("Toward", SHAPE_PARAMETER_COLORS["toward"], toward[:count]),
+            ("Away", SHAPE_PARAMETER_COLORS["away"], away[:count]),
+        ]
+        if count
+        else []
+    )
+    plot_line_panel(
+        ax,
+        times[:count],
+        traces,
+        "",
+        "Shape\nparameter",
+    )
+    ax.set_ylabel("Shape\nparameter", fontsize=18)
+    ax.axhline(
+        SHAPE_PARAMETER_THRESHOLD,
+        color="0.35",
+        linestyle="--",
+        linewidth=1.0,
+        alpha=0.8,
+        zorder=2,
+    )
+
+
+def plot_pad_score_panel(ax, times_unix, toward_values, away_values) -> None:
+    """Plot toward/away PAD scores and the standard +/-2 sigma guides."""
+    times = finite_array(times_unix)
+    toward = finite_array(toward_values)
+    away = finite_array(away_values)
+    count = min(times.size, toward.size, away.size)
+    traces = (
+        [
+            ("Toward", SHAPE_PARAMETER_COLORS["toward"], toward[:count]),
+            ("Away", SHAPE_PARAMETER_COLORS["away"], away[:count]),
+        ]
+        if count
+        else []
+    )
+    plot_line_panel(
+        ax,
+        times[:count],
+        traces,
+        "",
+        "PAD\nscore",
+    )
+    ax.set_ylabel("PAD\nscore", fontsize=18)
+    ax.axhline(0.0, color="0.2", linewidth=0.9, alpha=0.8, zorder=2)
+    for threshold in (-PAD_SCORE_THRESHOLD_SIGMA, PAD_SCORE_THRESHOLD_SIGMA):
+        ax.axhline(
+            threshold,
+            color="0.45",
+            linestyle="--",
+            linewidth=0.9,
+            alpha=0.7,
+            zorder=2,
+        )
+
+
 def plot_region_id_panel(ax, times_unix, region_ids) -> None:
     times = finite_array(times_unix)
     ids = np.asarray(region_ids, dtype=float)
@@ -975,7 +1295,6 @@ def plot_region_id_panel(ax, times_unix, region_ids) -> None:
     times = times[valid]
     ids = ids[valid].astype(int)
     x = [datetime.fromtimestamp(float(value), tz=timezone.utc) for value in times]
-    ax.step(x, ids, where="mid", color="#252A31", linewidth=1.0)
     for region_id, color in REGION_ID_COLORS.items():
         selected = ids == region_id
         if np.any(selected):
@@ -993,6 +1312,49 @@ def plot_region_id_panel(ax, times_unix, region_ids) -> None:
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
 
 
+def plot_topology_id_panel(ax, times_unix, topology_ids) -> None:
+    times = finite_array(times_unix)
+    ids = np.asarray(topology_ids, dtype=float)
+    count = min(times.size, ids.size)
+    if count == 0:
+        ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center", fontsize=18)
+        ax.set_ylabel("topology_id", fontsize=18)
+        return
+
+    times = times[:count]
+    ids = ids[:count]
+    valid = np.isfinite(times) & np.isfinite(ids)
+    if not np.any(valid):
+        ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", va="center", fontsize=18)
+        ax.set_ylabel("topology_id", fontsize=18)
+        return
+
+    times = times[valid]
+    ids = ids[valid].astype(int)
+    x = [datetime.fromtimestamp(float(value), tz=timezone.utc) for value in times]
+    for topology_id, color in TOPOLOGY_ID_COLORS.items():
+        selected = ids == topology_id
+        if np.any(selected):
+            ax.scatter(
+                np.asarray(x, dtype=object)[selected],
+                ids[selected],
+                s=12,
+                color=color,
+                edgecolors="none",
+                zorder=3,
+            )
+    ax.set_ylabel("topology_id", fontsize=18)
+    ax.set_yticks(
+        list(TOPOLOGY_ID_NAMES),
+        [
+            f"{topology_id} {TOPOLOGY_ID_NAMES[topology_id]}"
+            for topology_id in TOPOLOGY_ID_NAMES
+        ],
+    )
+    ax.set_ylim(-0.45, 7.45)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+
+
 def mark_target_time(ax, target_unix: float) -> None:
     ax.axvline(
         mdates.date2num(datetime.fromtimestamp(float(target_unix), tz=timezone.utc)),
@@ -1002,6 +1364,21 @@ def mark_target_time(ax, target_unix: float) -> None:
         alpha=0.9,
         zorder=10,
     )
+
+
+def mark_vertical_lines(
+    ax,
+    vertical_lines: tuple[tuple[datetime, str, str], ...],
+) -> None:
+    for line_time, linestyle, color in vertical_lines:
+        ax.axvline(
+            mdates.date2num(line_time),
+            color=color,
+            linestyle=linestyle,
+            linewidth=1.2,
+            alpha=0.95,
+            zorder=11,
+        )
 
 
 def mark_panel_id(ax, panel_id: int) -> None:
@@ -1115,6 +1492,7 @@ def plot_data_panels(
     figure_size: tuple[float, float] | None = None,
     center_on_target_time: bool = False,
     panel_ids: tuple[int, ...] = DEFAULT_PANEL_IDS,
+    vertical_lines: tuple[tuple[datetime, str, str], ...] = (),
 ) -> dict:
     panel_ids = validate_panel_ids(panel_ids)
     pad_energy_bands_eV = validate_energy_bands(pad_energy_bands_eV)
@@ -1234,11 +1612,29 @@ def plot_data_panels(
             )
         add_panel_colorbar(fig, axes_by_id[1], mesh, label="eflux", fontsize=cbar_fs)
 
+    mass_all = np.asarray(static.get("mass_eflux", []), dtype=float)
+    mass_axis = np.asarray(static.get("mass_amu", []), dtype=float)
+    mass_full_matrix = (
+        mass_all[static_indices]
+        if len(static_indices) and mass_all.size
+        else []
+    )
+    full_values_by_time_all = static.get("mass_eflux_by_time") or []
+    full_axis_by_time_all = static.get("mass_amu_by_time") or []
+    mass_full_by_time = (
+        [full_values_by_time_all[i] for i in static_indices]
+        if full_values_by_time_all
+        else []
+    )
+    mass_full_axis_by_time = (
+        [full_axis_by_time_all[i] for i in static_indices]
+        if full_axis_by_time_all
+        else []
+    )
+
     mass_light_all = np.asarray(static.get("mass_eflux_0_1p5", []), dtype=float)
     mass_heavy_all = np.asarray(static.get("mass_eflux_gt_1p5", []), dtype=float)
     if (not mass_light_all.size or not mass_heavy_all.size) and static.get("mass_eflux") is not None:
-        mass_all = np.asarray(static.get("mass_eflux", []), dtype=float)
-        mass_axis = np.asarray(static.get("mass_amu", []), dtype=float)
         light_mask = mass_axis < STATIC_MASS_SPLIT_AMU
         heavy_mask = mass_axis > STATIC_MASS_SPLIT_AMU
         if mass_all.ndim == 2 and mass_axis.size == mass_all.shape[1]:
@@ -1265,6 +1661,45 @@ def plot_data_panels(
             ]
         )
     )
+    mass_full_norm_values = (
+        np.concatenate(
+            [np.asarray(row, dtype=float).reshape(-1) for row in mass_full_by_time]
+        )
+        if mass_full_by_time
+        else np.asarray(mass_full_matrix, dtype=float)
+    )
+    mass_full_norm = positive_log_norm(mass_full_norm_values)
+
+    if FULL_MASS_PANEL_ID in axes_by_id:
+        if mass_full_by_time and mass_full_axis_by_time:
+            mesh = plot_variable_heatmap(
+                axes_by_id[FULL_MASS_PANEL_ID],
+                mass_full_by_time,
+                static_times,
+                mass_full_axis_by_time,
+                "",
+                "STATIC Mass\n(amu)",
+                log_y=True,
+                norm=mass_full_norm,
+            )
+        else:
+            mesh = plot_heatmap(
+                axes_by_id[FULL_MASS_PANEL_ID],
+                mass_full_matrix,
+                static_times,
+                mass_axis,
+                "",
+                "STATIC Mass\n(amu)",
+                log_y=True,
+                norm=mass_full_norm,
+            )
+        add_panel_colorbar(
+            fig,
+            axes_by_id[FULL_MASS_PANEL_ID],
+            mesh,
+            label="eflux",
+            fontsize=cbar_fs,
+        )
 
     if 2 in axes_by_id:
         if mass_light_by_time and mass_light_axis_by_time:
@@ -1421,6 +1856,97 @@ def plot_data_panels(
             region_values,
         )
 
+    topology = overview.get("magnetic_topology") or {}
+    topology_indices = window_indices(
+        topology.get("times_unix"),
+        center_unix,
+        window_seconds,
+    )
+    if TOPOLOGY_ID_PANEL_ID in axes_by_id:
+        topology_times = (
+            np.asarray(topology.get("times_unix", []), dtype=float)[topology_indices]
+            if len(topology_indices)
+            else []
+        )
+        topology_values = (
+            np.asarray(topology.get("topology_id", []), dtype=float)[topology_indices]
+            if len(topology_indices)
+            else []
+        )
+        plot_topology_id_panel(
+            axes_by_id[TOPOLOGY_ID_PANEL_ID],
+            topology_times,
+            topology_values,
+        )
+
+    shape_context = overview.get("shape_parameter") or {}
+    shape_indices = window_indices(
+        shape_context.get("times_unix"),
+        center_unix,
+        window_seconds,
+    )
+    if SHAPE_PARAMETER_PANEL_ID in axes_by_id:
+        shape_times = (
+            np.asarray(shape_context.get("times_unix", []), dtype=float)[shape_indices]
+            if len(shape_indices)
+            else []
+        )
+        toward_shape = (
+            np.asarray(
+                shape_context.get("toward_shape_parameter", []), dtype=float
+            )[shape_indices]
+            if len(shape_indices)
+            else []
+        )
+        away_shape = (
+            np.asarray(
+                shape_context.get("away_shape_parameter", []), dtype=float
+            )[shape_indices]
+            if len(shape_indices)
+            else []
+        )
+        plot_shape_parameter_panel(
+            axes_by_id[SHAPE_PARAMETER_PANEL_ID],
+            shape_times,
+            toward_shape,
+            away_shape,
+        )
+
+    pad_score_context = overview.get("pad_score") or {}
+    pad_score_indices = window_indices(
+        pad_score_context.get("times_unix"),
+        center_unix,
+        window_seconds,
+    )
+    if PAD_SCORE_PANEL_ID in axes_by_id:
+        pad_score_times = (
+            np.asarray(pad_score_context.get("times_unix", []), dtype=float)[
+                pad_score_indices
+            ]
+            if len(pad_score_indices)
+            else []
+        )
+        toward_pad_score = (
+            np.asarray(
+                pad_score_context.get("toward_pad_score", []), dtype=float
+            )[pad_score_indices]
+            if len(pad_score_indices)
+            else []
+        )
+        away_pad_score = (
+            np.asarray(
+                pad_score_context.get("away_pad_score", []), dtype=float
+            )[pad_score_indices]
+            if len(pad_score_indices)
+            else []
+        )
+        plot_pad_score_panel(
+            axes_by_id[PAD_SCORE_PANEL_ID],
+            pad_score_times,
+            toward_pad_score,
+            away_pad_score,
+        )
+
     resolved_pad_bands = []
     resolved_pad_panels = {}
     for panel_id in (7, 8):
@@ -1464,6 +1990,7 @@ def plot_data_panels(
         ax = axes_by_id[panel_id]
         ax.set_xlim(window_start, window_end)
         mark_target_time(ax, target_unix)
+        mark_vertical_lines(ax, vertical_lines)
         ax.grid(True, linestyle=":", alpha=0.25)
         ax.tick_params(axis="both", labelsize=tick_fs)
         ax.yaxis.label.set_size(label_fs)
@@ -1499,11 +2026,92 @@ def plot_data_panels(
         "panel_names": [PANEL_CATALOG[panel_id]["name"] for panel_id in panel_ids],
         "pad_energy_bands_eV": [list(band) for band in resolved_pad_bands],
         "pad_energy_bands_by_panel": resolved_pad_panels,
+        "vertical_lines": [
+            {
+                "time": line_time.isoformat(timespec="seconds"),
+                "linestyle": linestyle,
+                "color": color,
+            }
+            for line_time, linestyle, color in vertical_lines
+        ],
         "output_path": str(output_path),
     }
 
 def default_event_output_path(output_root: Path, target_time: datetime) -> Path:
     return output_root / target_time.strftime("%Y%m%dT%H%M%S") / "maven_data_panels.png"
+
+
+def generate_trace_maps(
+    summary: dict,
+    target_time: datetime,
+    window_minutes: float,
+    data_root: Path,
+    panel_output_path: Path,
+    vertical_lines: tuple[tuple[datetime, str, str], ...]
+    | list[tuple[datetime, str, str]] = (),
+) -> dict:
+    """Generate one ground-track map and three MSO maps for the panel window."""
+    from mars_crustal_model import DEFAULT_MODEL_ROOT
+    from plot_maven_orbit_map import (
+        plot_mso_orbit_projections,
+        plot_orbit_map,
+        resolve_mso_mag_files,
+        resolve_pc_mag_files,
+    )
+
+    model_root = Path(DEFAULT_MODEL_ROOT).expanduser()
+    if not model_root.is_absolute():
+        model_root = Path(__file__).resolve().parent / model_root
+    model_root = model_root.resolve()
+
+    selected_index = nearest_sample_index(summary.get("samples", []), target_time)
+    center_time = parse_iso_timestamp(
+        summary["samples"][selected_index]["target_time"]
+    )
+    half_window = timedelta(minutes=float(window_minutes) / 2.0)
+    start_time = center_time - half_window
+    end_time = center_time + half_window
+    interval_markers = tuple(
+        marker
+        for marker in vertical_lines
+        if start_time <= marker[0] <= end_time
+    )
+
+    pc_files = resolve_pc_mag_files(start_time, end_time, data_root)
+    ss_files = resolve_mso_mag_files(start_time, end_time, data_root)
+    panel_output_path = Path(panel_output_path)
+    output_stem = panel_output_path.stem
+    ground_output = panel_output_path.parent / f"{output_stem}_trace_ground.png"
+    mso_output_base = panel_output_path.parent / f"{output_stem}_trace_mso.png"
+
+    ground_result = plot_orbit_map(
+        target_time=center_time,
+        start_time=start_time,
+        end_time=end_time,
+        mag_pc_file=pc_files,
+        model_root=model_root,
+        output_path=ground_output,
+        trajectory_markers=interval_markers,
+    )
+    mso_result = plot_mso_orbit_projections(
+        start_time=start_time,
+        end_time=end_time,
+        mag_ss_files=ss_files,
+        output_path=mso_output_base,
+        trajectory_markers=interval_markers,
+    )
+    return {
+        "center_time": center_time.isoformat(timespec="seconds"),
+        "window_start": start_time.isoformat(timespec="seconds"),
+        "window_end": end_time.isoformat(timespec="seconds"),
+        "requested_line_marker_count": len(interval_markers),
+        "output_paths": {
+            "ground": str(ground_output),
+            **mso_result["output_paths"],
+        },
+        "ground": ground_result,
+        "mso": mso_result,
+    }
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -1513,6 +2121,17 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Optional path to topology_summary.json or data_panel_context_summary.json. If omitted, local data files are used directly.",
     )
     parser.add_argument("--time", required=True, help="UTC target time.")
+    parser.add_argument(
+        "--line",
+        action="append",
+        nargs="+",
+        default=None,
+        metavar="VALUE",
+        help=(
+            "Add a vertical line: --line TIME [STYLE] [COLOR]. STYLE defaults "
+            "to solid and COLOR to black. Repeat the option for multiple lines."
+        ),
+    )
     parser.add_argument("--window-minutes", type=float, default=20.0)
     parser.add_argument("--step-seconds", type=int, default=60, help="Cadence for altitude samples when reading local data.")
     parser.add_argument(
@@ -1522,6 +2141,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Classification cadence used only when panel 10 is selected.",
     )
     parser.add_argument(
+        "--topology-cadence-seconds",
+        type=float,
+        default=0.0,
+        help="Optional shape-sample thinning cadence used only when panel 11 is selected; 0 processes every SWEA sample.",
+    )
+    parser.add_argument(
+        "--shape-cadence-seconds",
+        type=float,
+        default=0.0,
+        help="Optional shape-sample thinning cadence used only when panel 12 is selected; 0 processes every SWEA sample.",
+    )
+    parser.add_argument(
         "--panels",
         "--panel-ids",
         nargs="+",
@@ -1529,7 +2160,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help=(
             "Panel IDs to include. Space-separated and comma-separated forms are "
-            f"accepted; output follows catalog order. Catalog: {panel_catalog_help()}"
+            "accepted; output follows input order except panel 9 is always last. "
+            f"Catalog: {panel_catalog_help()}"
         ),
     )
     parser.add_argument(
@@ -1553,12 +2185,21 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Root directory used for per-event output folders when --output is not supplied.",
     )
     parser.add_argument("--output", help="Explicit PNG output path. Overrides --output-root.")
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help=(
+            "Also generate four trajectory figures for the panel interval: "
+            "a crustal-field ground track plus MSO XY, XZ, and YZ projections."
+        ),
+    )
     return parser
 
 
 def main() -> None:
     args = build_argument_parser().parse_args()
     target_time = parse_iso_timestamp(args.time)
+    vertical_lines = parse_vertical_line_specs(args.line)
     panel_ids = validate_panel_ids(args.panels)
     pad_energy_bands_eV = validate_energy_bands(args.pad_energy_bands)
     data_root = Path(args.data_root).expanduser().resolve()
@@ -1595,6 +2236,102 @@ def main() -> None:
             cadence_seconds=args.region_id_cadence_seconds,
         )
 
+    if TOPOLOGY_ID_PANEL_ID in panel_ids:
+        selected_index = nearest_sample_index(summary.get("samples", []), target_time)
+        center_time = parse_iso_timestamp(
+            summary["samples"][selected_index]["target_time"]
+        )
+        half_window = timedelta(minutes=args.window_minutes / 2.0)
+        log_step(
+            "Classifying magnetic topology for panel 11: "
+            f"{(center_time - half_window).isoformat()} to "
+            f"{(center_time + half_window).isoformat()}"
+        )
+        topology_context = build_magnetic_topology_context(
+            start=center_time - half_window,
+            end=center_time + half_window,
+            data_root=data_root,
+            cadence_seconds=args.topology_cadence_seconds,
+        )
+        summary.setdefault("context_overview", {})[
+            "magnetic_topology"
+        ] = topology_context
+
+    if SHAPE_PARAMETER_PANEL_ID in panel_ids:
+        selected_index = nearest_sample_index(summary.get("samples", []), target_time)
+        center_time = parse_iso_timestamp(
+            summary["samples"][selected_index]["target_time"]
+        )
+        half_window = timedelta(minutes=args.window_minutes / 2.0)
+        overview = summary.setdefault("context_overview", {})
+        topology_context = overview.get("magnetic_topology") or {}
+        can_reuse_topology = (
+            TOPOLOGY_ID_PANEL_ID in panel_ids
+            and "toward_shape_parameter" in topology_context
+            and "away_shape_parameter" in topology_context
+            and float(args.shape_cadence_seconds)
+            == float(args.topology_cadence_seconds)
+        )
+        if can_reuse_topology:
+            log_step("Reusing panel 11 shape parameters for panel 12.")
+            overview["shape_parameter"] = {
+                "times_unix": topology_context.get("times_unix", []),
+                "toward_shape_parameter": topology_context.get(
+                    "toward_shape_parameter", []
+                ),
+                "away_shape_parameter": topology_context.get(
+                    "away_shape_parameter", []
+                ),
+                "metadata": topology_context.get("metadata", {}),
+            }
+        else:
+            log_step(
+                "Computing shape parameters for panel 12: "
+                f"{(center_time - half_window).isoformat()} to "
+                f"{(center_time + half_window).isoformat()}"
+            )
+            overview["shape_parameter"] = build_shape_parameter_context(
+                start=center_time - half_window,
+                end=center_time + half_window,
+                data_root=data_root,
+                cadence_seconds=args.shape_cadence_seconds,
+            )
+
+    if PAD_SCORE_PANEL_ID in panel_ids:
+        selected_index = nearest_sample_index(summary.get("samples", []), target_time)
+        center_time = parse_iso_timestamp(
+            summary["samples"][selected_index]["target_time"]
+        )
+        half_window = timedelta(minutes=args.window_minutes / 2.0)
+        overview = summary.setdefault("context_overview", {})
+        topology_context = overview.get("magnetic_topology") or {}
+        can_reuse_topology = (
+            TOPOLOGY_ID_PANEL_ID in panel_ids
+            and "toward_pad_score" in topology_context
+            and "away_pad_score" in topology_context
+        )
+        if can_reuse_topology:
+            log_step("Reusing panel 11 PAD scores for panel 13.")
+            overview["pad_score"] = {
+                "times_unix": topology_context.get("times_unix", []),
+                "toward_pad_score": topology_context.get(
+                    "toward_pad_score", []
+                ),
+                "away_pad_score": topology_context.get("away_pad_score", []),
+                "metadata": topology_context.get("metadata", {}),
+            }
+        else:
+            log_step(
+                "Computing PAD scores for panel 13: "
+                f"{(center_time - half_window).isoformat()} to "
+                f"{(center_time + half_window).isoformat()}"
+            )
+            overview["pad_score"] = build_pad_score_context(
+                start=center_time - half_window,
+                end=center_time + half_window,
+                data_root=data_root,
+            )
+
     output_path = (
         Path(args.output).expanduser().resolve()
         if args.output
@@ -1609,7 +2346,18 @@ def main() -> None:
         window_minutes=args.window_minutes,
         pad_energy_bands_eV=pad_energy_bands_eV,
         panel_ids=panel_ids,
+        vertical_lines=vertical_lines,
     )
+    if args.trace:
+        log_step("Generating ground-track and MSO XY/XZ/YZ trace figures.")
+        result["trace"] = generate_trace_maps(
+            summary=summary,
+            target_time=target_time,
+            window_minutes=args.window_minutes,
+            data_root=data_root,
+            panel_output_path=output_path,
+            vertical_lines=vertical_lines,
+        )
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 

@@ -24,7 +24,7 @@ def region_row(time_unix: float, region_id: int, region_name: str) -> dict:
         "region_name": region_name,
         "confidence": 0.8,
         "reason": "test_region",
-        "geometry_only": region_id == 1,
+        "geometry_only": region_id in {1, 2},
     }
 
 
@@ -41,16 +41,15 @@ def build(shape_rows: list[dict], region_rows: list[dict], pad_df=None):
     )
 
 
-def test_region_id_zero_overrides_unknown_as_draped_dp():
+def test_region_id_zero_keeps_xu_table_result():
     df = build(
         [shape_row(100.0)],
         [region_row(100.0, 0, "Unknown")],
     )
     row = df.iloc[0]
-    assert row["topology"] == "DP"
-    assert row["topology_label"] == "draped DP"
-    assert row["topology_subcase"] == "7b"
-    assert row["topology_source"] == "region_id_0_1_override"
+    assert row["topology"] == "unknown"
+    assert row["topology_id"] == 0
+    assert row["topology_source"] == "xu2019_shape_pad_table"
     assert row["table_topology"] == "unknown"
     assert row["region_id"] == 0
 
@@ -62,12 +61,28 @@ def test_region_id_one_overrides_as_draped_dp():
     )
     row = df.iloc[0]
     assert row["topology"] == "DP"
+    assert row["topology_id"] == 7
     assert row["topology_subcase"] == "7b"
+    assert row["topology_source"] == "region_id_1_2_override"
     assert row["region_id_geometry_only"]
     assert row["region_id"] == 1
 
 
-def test_other_region_keeps_xu_table_result():
+def test_region_id_two_overrides_as_draped_dp():
+    df = build(
+        [shape_row(250.0)],
+        [region_row(250.0, 2, "Magnetosheath")],
+    )
+    row = df.iloc[0]
+    assert row["topology"] == "DP"
+    assert row["topology_id"] == 7
+    assert row["topology_subcase"] == "7b"
+    assert row["topology_source"] == "region_id_1_2_override"
+    assert row["region_id_geometry_only"]
+    assert row["region_id"] == 2
+
+
+def test_region_id_three_keeps_xu_table_result():
     time_unix = 300.0
     pad_df = pd.DataFrame(
         [
@@ -83,11 +98,12 @@ def test_other_region_keeps_xu_table_result():
     )
     df = build(
         [shape_row(time_unix, shape_value=2.0)],
-        [region_row(time_unix, 2, "Magnetosheath")],
+        [region_row(time_unix, 3, "Ionosphere")],
         pad_df=pad_df,
     )
     row = df.iloc[0]
     assert row["topology"] == "DP"
+    assert row["topology_id"] == 7
     assert row["topology_subcase"] == "7a"
     assert row["topology_source"] == "xu2019_shape_pad_table"
-    assert row["region_id"] == 2
+    assert row["region_id"] == 3
